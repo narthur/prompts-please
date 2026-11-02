@@ -70,6 +70,7 @@ async function showBoard(id: string | null) {
 // Questions and answers per visitor, kept across re-renders.
 const transcripts = new Map<string, string[]>()
 const pending = new Set<string>()
+const questionDrafts = new Map<string, string>()
 
 function interrogation(id: string): HTMLElement {
   const box = el('div')
@@ -79,6 +80,8 @@ function interrogation(id: string): HTMLElement {
   for (const line of transcripts.get(id) ?? []) log.append(el('p', line))
   const q = el('input')
   q.placeholder = 'Ask a question (a fresh copy of the agent answers each one; the agent itself is untouched)'
+  q.value = questionDrafts.get(id) ?? ''
+  q.oninput = () => questionDrafts.set(id, q.value)
   const ask = el('button', 'Interrogate')
   if (pending.has(id)) { ask.disabled = true; ask.textContent = 'Waiting for an answer…' }
   ask.onclick = async () => {
@@ -89,6 +92,7 @@ function interrogation(id: string): HTMLElement {
     ask.textContent = 'Waiting for an answer…'
     show(`Q: ${question}`)
     q.value = ''
+    questionDrafts.delete(id)
     try {
       const res = await fetch(`/api/hall/${encodeURIComponent(id)}/interrogate`, {
         method: 'POST',
@@ -120,7 +124,10 @@ function render() {
   hallEl.replaceChildren(...hall.map((v) => {
     const li = el('li', `${v.stale ? 'STALE · ' : ''}${v.kind === 'incident' ? 'INCIDENT · ' : v.kind === 'finished' ? 'DONE · ' : ''}${v.character.name} · ${v.toolName} · ${v.character.label} · ${v.waitSeconds}s`)
     li.classList.toggle('selected', v.toolUseId === selectedId)
+    li.tabIndex = 0
+    li.setAttribute('role', 'button')
     li.onclick = () => { selectedId = v.toolUseId; render() }
+    li.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); li.click() } }
     return li
   }))
   if (problem) hallEl.prepend(el('li', problem))
@@ -211,15 +218,21 @@ function renderOther(sessions: InteractiveSession[]) {
   if (!sessions.length) otherEl.append(el('li', 'No interactive sessions running.'))
 }
 
+let refreshSeq = 0
 async function refresh() {
+  const seq = ++refreshSeq
   const [hallRes, ledgerRes, otherRes] = await Promise.allSettled([fetch('/api/hall'), fetch('/api/ledger?limit=50'), fetch('/api/other-window')])
+  let next: Visitor[] | null = null, why = ''
   try {
-    if (hallRes.status === 'rejected') problem = 'Bureau unreachable'
-    else if (hallRes.value.ok) { hall = await hallRes.value.json(); problem = '' }
-    else problem = `Bureau error: ${await errorText(hallRes.value)}`
+    if (hallRes.status === 'rejected') why = 'Bureau unreachable'
+    else if (hallRes.value.ok) next = await hallRes.value.json()
+    else why = `Bureau error: ${await errorText(hallRes.value)}`
   } catch {
-    problem = 'Bureau sent an unreadable hall'
+    why = 'Bureau sent an unreadable hall'
   }
+  if (seq !== refreshSeq) return // a newer refresh started meanwhile (e.g. after a stamp); its snapshot wins
+  if (next) hall = next
+  problem = why
   render()
   // The ledger is secondary: if it fails, keep showing the last good one.
   try { if (ledgerRes.status === 'fulfilled' && ledgerRes.value.ok) renderLedger(await ledgerRes.value.json()) } catch {}

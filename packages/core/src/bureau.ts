@@ -1,6 +1,6 @@
 // The bureau: the hall of waiting visitors and the decisions stamped on them.
 // State lives in a directory so the hook (a separate process per tool call) and the server share it.
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 
 /** A PreToolUse hook payload, as Claude Code sends it on stdin. */
@@ -176,7 +176,12 @@ export function stamp(dir: string, toolUseId: string, decision: Decision, now = 
   // Leave the hall before recording, so a failure can't lead to the same stamp being recorded twice.
   // Only the server writes the ledger, so appends never race.
   rmSync(hallFile)
-  appendLedger(dir, record)
+  try { appendLedger(dir, record) } catch (e) {
+    // Unrecorded means undecided: put the visitor back so the agent isn't parked for good.
+    writeAtomic(hallFile, entry)
+    rmSync(fileFor(decisionsDir(dir), toolUseId), { force: true })
+    throw e
+  }
   const resume: Resume = { sessionId: record.sessionId, cwd: record.cwd, ...(record.job ? { job: record.job } : {}) }
   if (entry.kind === 'incident') return null
   if (entry.kind === 'finished') return decision.verdict === 'return' ? { ...resume, prompt: decision.note } : null
@@ -202,7 +207,19 @@ export function fileFinished(dir: string, form: FinishedForm, now = new Date()):
   return id
 }
 
-const appendLedger = (dir: string, record: LedgerEntry) => appendFileSync(ledgerFile(dir), JSON.stringify(record) + '\n')
+function appendLedger(dir: string, record: LedgerEntry) {
+  // A crash mid-append leaves a line with no newline; start a fresh line so this record isn't glued onto it.
+  let torn = false
+  try {
+    const fd = openSync(ledgerFile(dir), 'r')
+    try {
+      const { size } = fstatSync(fd)
+      const last = Buffer.alloc(1)
+      torn = size > 0 && readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a
+    } finally { closeSync(fd) }
+  } catch {} // no ledger yet; anything worse fails the append below
+  appendFileSync(ledgerFile(dir), (torn ? '\n' : '') + JSON.stringify(record) + '\n')
+}
 
 /** Complain about an earlier stamp. Sends an incident visitor to the hall and returns its id. */
 export function fileComplaint(dir: string, against: string, reason: string, now = new Date()): string {

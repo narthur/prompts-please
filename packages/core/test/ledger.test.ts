@@ -1,11 +1,11 @@
 // The summary uses local time; pin it so the expected times hold anywhere.
 process.env.TZ = 'UTC'
 
-import { appendFileSync, mkdtempSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, expect, test } from 'vitest'
-import { submit, stamp, readLedger, dailySummary } from '../src/bureau.ts'
+import { submit, stamp, readLedger, dailySummary, listHall, decisionFor } from '../src/bureau.ts'
 
 const writeCall = JSON.parse(readFileSync(new URL('./pretooluse-write.json', import.meta.url), 'utf8'))
 const call = (id: string) => ({ ...writeCall, tool_use_id: id })
@@ -85,4 +85,21 @@ test('agent-written text cannot inject Markdown or wiki links into the summary',
   const line = dailySummary(readLedger(dir), '2026-11-01').split('\n').find((l) => l.startsWith('- '))
 
   expect(line).toBe('- 09:00 **Refuse** Write in `we\'ird`: see \\[\\[secrets\\]\\] and \\`rm -rf\\` \\*\\*now\\*\\*')
+})
+
+test('a torn last line (crash mid-append) does not swallow the next stamp', () => {
+  appendFileSync(join(dir, 'ledger.jsonl'), '{"type":"stamp","at":"2026-')
+  submit(dir, call('toolu_a'))
+  stamp(dir, 'toolu_a', { verdict: 'admit' })
+
+  expect(readLedger(dir).map((e) => e.toolUseId)).toEqual(['toolu_a'])
+})
+
+test('if the ledger cannot be written, the visitor stays in the hall undecided', () => {
+  mkdirSync(join(dir, 'ledger.jsonl')) // appending to a directory fails
+  submit(dir, call('toolu_a'))
+
+  expect(() => stamp(dir, 'toolu_a', { verdict: 'admit' })).toThrow()
+  expect(listHall(dir).map((v) => v.toolUseId)).toEqual(['toolu_a'])
+  expect(decisionFor(dir, 'toolu_a')).toBeNull()
 })

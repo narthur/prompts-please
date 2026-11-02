@@ -123,7 +123,7 @@ class Booth extends Phaser.Scene {
       targets: stamp, y: FORM.y - 20, duration: 140, ease: 'Quad.easeIn',
       onComplete: () => {
         thud()
-        this.cameras.main.shake(120, 0.01)
+        if (!matchMedia('(prefers-reduced-motion: reduce)').matches) this.cameras.main.shake(120, 0.01)
         const ink = this.add.image(FORM.x, FORM.y, `ink-${verdict}`).setScale(0.45).setAngle(Phaser.Math.Between(-12, 12))
         this.tweens.add({ targets: stamp, y: -60, duration: 200, delay: 150, onComplete: () => stamp.destroy() })
         this.time.delayedCall(700, () => {
