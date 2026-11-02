@@ -13,6 +13,7 @@
     #hall li.selected { border-color: #d9b45a; }
     #papers pre { white-space: pre-wrap; word-break: break-word; background: #f1e9d2; color: #2a2620; padding: 10px; max-height: 50vh; overflow: auto; }
     #other { opacity: 0.5; cursor: default; } .hint { font-size: 0.8em; opacity: 0.7; margin: 0; }
+    #board div pre { white-space: pre-wrap; max-height: 30vh; overflow: auto; background: #e8eef1; color: #1f2a30; padding: 8px; user-select: text; }
     #papers .portrait { float: right; width: 64px; image-rendering: pixelated; }
     #papers .interrogation input { width: 70%; } #papers .interrogation p { white-space: pre-wrap; margin: 4px 0; }
     textarea { width: 100%; box-sizing: border-box; font: inherit; margin: 8px 0; }
@@ -31,6 +32,7 @@
     <section>
       <div id="scene"></div>
       <div id="papers"></div>
+      <details id="board" open><summary>Directive board</summary><div></div></details>
     </section>
     <aside>
       <h2>Hall</h2>

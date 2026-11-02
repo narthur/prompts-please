@@ -64,6 +64,34 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = ''): HTMLEleme
   return node
 }
 
+const boardEl = document.querySelector<HTMLDivElement>('#board div')!
+let boardFor: string | null = null
+
+// Load the rules for the visitor at the booth; a slow reply for an earlier visitor is dropped.
+async function showBoard(id: string | null) {
+  if (id === boardFor) return
+  boardFor = id
+  if (!id) return boardEl.replaceChildren()
+  boardEl.replaceChildren(el('p', 'Loading…'))
+  let content: HTMLElement[]
+  let failed = false
+  try {
+    const res = await fetch(`/api/hall/${encodeURIComponent(id)}/directives`)
+    const rules: { source: string; text: string }[] = res.ok ? await res.json() : []
+    content = res.ok
+      ? rules.flatMap((r) => [el('h4', r.source), el('pre', r.text)])
+      : [el('p', `Could not load the rules: ${await errorText(res)}`)]
+    if (res.ok && !rules.length) content = [el('p', 'No CLAUDE.md applies to this visitor.')]
+    failed = !res.ok
+  } catch {
+    content = [el('p', 'Could not load the rules: bureau unreachable')]
+    failed = true
+  }
+  if (boardFor !== id) return // the operator moved on to another visitor
+  if (failed) boardFor = null // try again on the next poll
+  boardEl.replaceChildren(el('p', 'CLAUDE.md files only; imports, CLAUDE.local.md and memory are not shown.'), ...content)
+}
+
 // Questions and answers per visitor, kept across re-renders.
 const transcripts = new Map<string, string[]>()
 const pending = new Set<string>()
@@ -122,6 +150,7 @@ function render() {
   }))
   if (problem) hallEl.prepend(el('li', problem))
 
+  showBoard(selectedId) // outside the papers check below, so a failed load is retried on the next poll
   // Only rebuild the papers when the visitor changes, so polling doesn't reset scroll or selection.
   const key = `${selectedId}|${stamping}`
   if (key === papersKey) return

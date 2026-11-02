@@ -3,8 +3,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { dailySummary, fileComplaint, interrogate, listHall, listOtherWindow, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
-import { matcher, port, sessionsDir, stateDir, summaryDir } from './config.ts'
+import { dailySummary, directives, fileComplaint, interrogate, listHall, listOtherWindow, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
+import { globalDirectives, matcher, port, sessionsDir, stateDir, summaryDir } from './config.ts'
 import * as claude from './services/claude/index.ts'
 import { writeDailySummary } from './services/vault/index.ts'
 import * as git from './services/git/index.ts'
@@ -115,6 +115,11 @@ createServer((req, res) => {
       send(res, 200, { incident })
     }, () => send(res, 413, { error: 'body too large' }))
     return
+  }
+
+  const boardRoute = url.pathname.match(/^\/api\/hall\/([^/]+)\/directives$/)
+  if (req.method === 'GET' && boardRoute) {
+    try { return send(res, 200, directives(stateDir, decodeId(boardRoute[1]), globalDirectives)) } catch (e) { return sendError(res, e) }
   }
 
   const askRoute = url.pathname.match(/^\/api\/hall\/([^/]+)\/interrogate$/)

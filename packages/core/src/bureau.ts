@@ -1,7 +1,7 @@
 // The bureau: the hall of waiting visitors and the decisions stamped on them.
 // State lives in a directory so the hook (a separate process per tool call) and the server share it.
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 
 /** A PreToolUse hook payload, as Claude Code sends it on stdin. */
 export type PermissionForm = {
@@ -246,15 +246,44 @@ export function matchReverts(dir: string, git: RevertSource, now = new Date()): 
   return { incidents: raised, errors }
 }
 
+/** The papers of a waiting visitor of any kind. */
+function papersFor(dir: string, id: string): Papers {
+  const entry = readEntry(fileFor(hallDir(dir), id))
+  if (!entry) throw new NotFound(`${id} is not in the hall`)
+  return entry.kind === 'incident' || entry.kind === 'finished' ? entry.papers : papersOf(entry.form)
+}
+
+/** One file of rules on the directive board. */
+export type Directive = { source: string; text: string }
+
+/**
+ * The rules that apply to a waiting visitor: the operator's global instructions, then each CLAUDE.md
+ * from the filesystem root down to the visitor's directory (the files Claude Code itself loads).
+ */
+// ponytail: CLAUDE.md files only; .claude/CLAUDE.md, @imports, rules folders and memory aren't shown.
+export function directives(dir: string, id: string, globalFile: string): Directive[] {
+  const { cwd } = papersFor(dir, id)
+  const project: string[] = []
+  // A relative cwd would resolve against the bureau's own directory and show the wrong project's rules.
+  if (isAbsolute(cwd)) for (let d = cwd; ; d = dirname(d)) {
+    project.unshift(join(d, 'CLAUDE.md'))
+    if (dirname(d) === d) break
+  }
+  return [...new Set([globalFile, ...project])].flatMap((source) => {
+    try { return [{ source, text: readFileSync(source, 'utf8') }] } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      return code === 'ENOENT' ? [] : [{ source, text: `(could not read this file: ${code})` }]
+    }
+  })
+}
+
 /** Asks a forked copy of a session a question; the claude service in production, a fake in tests. */
 export type Interrogator = { forkAndAsk(q: { sessionId: string; cwd: string; question: string }): Promise<string> }
 
 /** Ask a waiting visitor's session a question without touching it. Nothing is stamped or recorded. */
 export async function interrogate(dir: string, id: string, question: string, claude: Interrogator): Promise<string> {
   if (!question.trim()) throw new Error('an interrogation needs a question')
-  const entry = readEntry(fileFor(hallDir(dir), id))
-  if (!entry) throw new NotFound(`${id} is not in the hall`)
-  const { sessionId, cwd } = entry.kind === 'incident' || entry.kind === 'finished' ? entry.papers : papersOf(entry.form)
+  const { sessionId, cwd } = papersFor(dir, id)
   return claude.forkAndAsk({ sessionId, cwd, question })
 }
 
