@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { dailySummary, directives, fileComplaint, interrogate, listHall, listOtherWindow, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
+import { type Resume, dailySummary, directives, fileComplaint, interrogate, listHall, listOtherWindow, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
 import { globalDirectives, matcher, port, sessionsDir, stateDir, summaryDir } from './config.ts'
 import * as claude from './services/claude/index.ts'
 import { writeDailySummary } from './services/vault/index.ts'
@@ -52,6 +52,31 @@ function trusted(req: IncomingMessage): boolean {
 const sendError = (res: ServerResponse, e: unknown) =>
   send(res, e instanceof NotFound ? 404 : e instanceof claude.Upstream ? 502 : 400, { error: (e as Error).message })
 
+// One resume per session at a time: two at once would interleave turns in one transcript.
+// Stamps that land meanwhile queue up and run in order as each resume exits; one plain resume
+// picks up every parked call stamped by then, so plain resumes aren't queued twice.
+// ponytail: in memory, so a bureau restart forgets running and queued resumes; persist if restarts mid-run matter.
+const running = new Set<string>()
+const queued = new Map<string, Resume[]>()
+function resumeOnce(r: Resume) {
+  if (running.has(r.sessionId)) {
+    const queue = queued.get(r.sessionId) ?? []
+    if (r.prompt !== undefined || !queue.some((q) => q.prompt === undefined)) queue.push(r)
+    queued.set(r.sessionId, queue)
+    return
+  }
+  running.add(r.sessionId)
+  let done = false // 'error' and 'exit' can both fire
+  claude.resumeSession({ ...r, settingsPath, stateDir, onExit: () => {
+    if (done) return
+    done = true
+    running.delete(r.sessionId)
+    const next = queued.get(r.sessionId)?.shift()
+    if (!queued.get(r.sessionId)?.length) queued.delete(r.sessionId)
+    if (next) resumeOnce(next)
+  } })
+}
+
 // A malformed escape is left as is; the bureau's id check then rejects it with a 400 instead of throwing here.
 const decodeId = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
 
@@ -96,7 +121,7 @@ createServer((req, res) => {
       const now = new Date() // one clock reading, so the stamp lands in the note for its own day
       let resume
       try { resume = stamp(stateDir, id, decision, now) } catch (e) { return sendError(res, e) }
-      if (resume) claude.resumeSession({ ...resume, settingsPath, stateDir })
+      if (resume) resumeOnce(resume)
       refreshSummary(now)
       send(res, 200, { stamped: id, verdict: decision.verdict })
     }, () => send(res, 413, { error: 'body too large' }))

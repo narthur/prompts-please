@@ -14,7 +14,7 @@ export class Upstream extends Error {}
  * Runs detached; output goes to a log under the state directory.
  * ponytail: resumes with default flags; the original run's --model etc. aren't recorded yet.
  */
-export function resumeSession(opts: { sessionId: string; cwd: string; prompt?: string; job?: string; settingsPath: string; stateDir: string }): void {
+export function resumeSession(opts: { sessionId: string; cwd: string; prompt?: string; job?: string; settingsPath: string; stateDir: string; onExit?: () => void }): void {
   const logDir = join(opts.stateDir, 'runs')
   mkdirSync(logDir, { recursive: true })
   const log = openSync(join(logDir, `${opts.sessionId}-${Date.now()}.json`), 'a')
@@ -32,7 +32,11 @@ export function resumeSession(opts: { sessionId: string; cwd: string; prompt?: s
   child.stdin?.on('error', (e) => console.error(`prompt for ${opts.sessionId} not delivered: ${e.message}`))
   child.stdin?.end(opts.prompt)
   // Without this, a missing `claude` on PATH (ENOENT) would crash the whole bureau.
-  child.on('error', (e) => console.error(`resume of ${opts.sessionId} failed to start: ${e.message}`))
+  child.on('error', (e) => { console.error(`resume of ${opts.sessionId} failed to start: ${e.message}`); opts.onExit?.() })
+  child.on('exit', (code, signal) => {
+    if (code || signal) console.error(`resume of ${opts.sessionId} ended with ${code ?? signal}; see ${logDir}`)
+    opts.onExit?.()
+  })
   child.unref()
 }
 

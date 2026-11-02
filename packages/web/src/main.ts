@@ -9,6 +9,7 @@ type Visitor = {
   toolName: string
   toolInput: Record<string, unknown>
   waitSeconds: number
+  stale: boolean
   character: { label: string; name: string; portrait: number }
   trust: { admitted: number; complaints: number; level: 'unknown' | 'known' | 'trusted' | 'suspect' }
 } & ({ kind: 'permission' } | { kind: 'incident'; against: string; complaint: string } | { kind: 'finished' })
@@ -143,7 +144,7 @@ function render() {
   for (const id of transcripts.keys()) if (!hall.some((v) => v.toolUseId === id)) transcripts.delete(id)
 
   hallEl.replaceChildren(...hall.map((v) => {
-    const li = el('li', `${v.kind === 'incident' ? 'INCIDENT · ' : v.kind === 'finished' ? 'DONE · ' : ''}${v.character.name} · ${v.toolName} · ${v.character.label} · ${v.waitSeconds}s`)
+    const li = el('li', `${v.stale ? 'STALE · ' : ''}${v.kind === 'incident' ? 'INCIDENT · ' : v.kind === 'finished' ? 'DONE · ' : ''}${v.character.name} · ${v.toolName} · ${v.character.label} · ${v.waitSeconds}s`)
     li.classList.toggle('selected', v.toolUseId === selectedId)
     li.onclick = () => { selectedId = v.toolUseId; render() }
     return li
@@ -189,6 +190,7 @@ function render() {
       : v.kind === 'finished'
       ? [el('h3', 'Finished work'), el('p', 'Return sends the note to the agent as its next instruction. Refuse closes it; the reason stays in the ledger.')]
       : [el('h3', `${v.toolName} request`)]),
+    ...(v.stale ? [el('p', 'Stale: this session’s transcript is gone, so a stamp cannot resume the agent. It is still recorded.')] : []),
     el('p', `Project: ${v.cwd}`),
     el('p', `Session: ${v.sessionId}`),
     ...(v.kind === 'finished'

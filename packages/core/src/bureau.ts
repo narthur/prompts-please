@@ -1,6 +1,6 @@
 // The bureau: the hall of waiting visitors and the decisions stamped on them.
 // State lives in a directory so the hook (a separate process per tool call) and the server share it.
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 
 /** A PreToolUse hook payload, as Claude Code sends it on stdin. */
@@ -25,7 +25,8 @@ export type Resume = { sessionId: string; cwd: string; prompt?: string; job?: st
 export type Character = { id: string; label: string; name: string; portrait: number }
 export type Trust = { admitted: number; complaints: number; level: 'unknown' | 'known' | 'trusted' | 'suspect' }
 
-export type Visitor = Papers & { toolUseId: string; arrivedAt: string; waitSeconds: number; character: Character; trust: Trust } & (
+/** `stale`: the session's transcript is gone, so stamping it can't resume the agent. */
+export type Visitor = Papers & { toolUseId: string; arrivedAt: string; waitSeconds: number; character: Character; trust: Trust; stale: boolean } & (
   | { kind: 'permission' }
   /** A complaint about an earlier admission (`against`). */
   | { kind: 'incident'; against: string; complaint: string }
@@ -121,6 +122,11 @@ export function submit(dir: string, form: PermissionForm, now = new Date()): voi
   writeAtomic(file, { kind: 'permission', form, arrivedAt } satisfies HallEntry)
 }
 
+// ponytail: a missing transcript is the only staleness checked; an expired prompt cache just costs more on resume.
+// Finished visitors aren't checked: the Stop hook doesn't record their transcript yet.
+const isStale = (f: PermissionForm) =>
+  typeof f.transcript_path === 'string' && isAbsolute(f.transcript_path) && !existsSync(f.transcript_path)
+
 export function listHall(dir: string, now = new Date()): Visitor[] {
   let files: string[]
   try { files = readdirSync(hallDir(dir)) } catch { return [] }
@@ -133,10 +139,13 @@ export function listHall(dir: string, now = new Date()): Visitor[] {
     .map((e): Visitor => {
       const waitSeconds = Math.floor((now.getTime() - Date.parse(e.arrivedAt)) / 1000)
       return e.kind === 'incident'
-        ? { kind: 'incident', toolUseId: e.id, against: e.against, complaint: e.complaint, ...e.papers, ...who(e.papers), arrivedAt: e.arrivedAt, waitSeconds }
+        ? { kind: 'incident', toolUseId: e.id, against: e.against, complaint: e.complaint, ...e.papers, ...who(e.papers), arrivedAt: e.arrivedAt, waitSeconds, stale: false }
         : e.kind === 'finished'
-        ? { kind: 'finished', toolUseId: e.id, ...e.papers, ...who(e.papers), arrivedAt: e.arrivedAt, waitSeconds }
-        : { kind: 'permission', toolUseId: e.form.tool_use_id, ...papersOf(e.form), ...who(papersOf(e.form)), arrivedAt: e.arrivedAt, waitSeconds }
+        ? { kind: 'finished', toolUseId: e.id, ...e.papers, ...who(e.papers), arrivedAt: e.arrivedAt, waitSeconds, stale: false }
+        : {
+          kind: 'permission', toolUseId: e.form.tool_use_id, ...papersOf(e.form), ...who(papersOf(e.form)), arrivedAt: e.arrivedAt, waitSeconds,
+          stale: isStale(e.form),
+        }
     })
     .sort((a, b) => a.arrivedAt.localeCompare(b.arrivedAt))
 }
@@ -171,7 +180,7 @@ export function stamp(dir: string, toolUseId: string, decision: Decision, now = 
   const resume: Resume = { sessionId: record.sessionId, cwd: record.cwd, ...(record.job ? { job: record.job } : {}) }
   if (entry.kind === 'incident') return null
   if (entry.kind === 'finished') return decision.verdict === 'return' ? { ...resume, prompt: decision.note } : null
-  return resume
+  return isStale(entry.form) ? null : resume // a stale session can't be resumed; the stamp is still recorded
 }
 
 /**
