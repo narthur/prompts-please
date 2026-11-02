@@ -11,6 +11,8 @@ type Visitor = {
   waitSeconds: number
 }
 
+type Verdict = 'admit' | 'refuse' | 'return'
+
 let hall: Visitor[] = []
 let selectedId: string | null = null
 
@@ -50,6 +52,8 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = ''): HTMLEleme
   return node
 }
 
+// Draft notes per visitor, so re-rendering or a failed stamp never loses what the operator typed.
+const drafts = new Map<string, string>()
 let papersKey = ''
 let stamping = false
 let problem = ''
@@ -71,15 +75,31 @@ function render() {
   papersKey = key
   const v = hall.find((x) => x.toolUseId === selectedId)
   if (!v) return papersEl.replaceChildren(el('p', 'The hall is empty.'))
-  const admitBtn = el('button', stamping ? 'Stamping…' : 'Admit')
-  admitBtn.disabled = stamping
-  admitBtn.onclick = () => stamp(v.toolUseId)
+  const note = el('textarea')
+  note.placeholder = 'Reason or note for the agent (needed to Refuse or Return)'
+  note.rows = 3
+  note.value = drafts.get(v.toolUseId) ?? ''
+  note.oninput = () => drafts.set(v.toolUseId, note.value)
+  const button = (verdict: Verdict, label: string) => {
+    const b = el('button', stamping ? 'Stamping…' : label)
+    b.disabled = stamping
+    b.dataset.verdict = verdict
+    b.onclick = () => {
+      if (verdict !== 'admit' && !note.value.trim()) return note.focus()
+      stamp(v.toolUseId, verdict, note.value)
+    }
+    return b
+  }
+  const stamps = el('div')
+  stamps.className = 'stamps'
+  stamps.append(button('admit', 'Admit'), button('refuse', 'Refuse'), button('return', 'Return with note'))
   papersEl.replaceChildren(
     el('h3', `${v.toolName} request`),
     el('p', `Project: ${v.cwd}`),
     el('p', `Session: ${v.sessionId}`),
     el('pre', JSON.stringify(v.toolInput, null, 2)),
-    admitBtn,
+    note,
+    stamps,
   )
 }
 
@@ -98,15 +118,17 @@ async function refresh() {
   render()
 }
 
-async function stamp(toolUseId: string) {
+async function stamp(toolUseId: string, verdict: Verdict, text: string) {
   stamping = true
   render()
   try {
-    const res = await fetch(`/api/hall/${encodeURIComponent(toolUseId)}/admit`, {
+    const res = await fetch(`/api/hall/${encodeURIComponent(toolUseId)}/stamp`, {
       method: 'POST',
-      headers: { 'X-Prompts-Please': '1' },
+      headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
+      body: JSON.stringify(verdict === 'admit' ? { verdict } : verdict === 'refuse' ? { verdict, reason: text } : { verdict, note: text }),
     })
-    if (!res.ok) alert(`Stamp failed: ${await errorText(res)}`)
+    if (res.ok) drafts.delete(toolUseId)
+    else alert(`Stamp failed: ${await errorText(res)}`)
   } catch {
     alert('Stamp failed: bureau unreachable')
   }

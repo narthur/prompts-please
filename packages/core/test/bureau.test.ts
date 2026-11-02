@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, expect, test } from 'vitest'
-import { submit, listHall, admit, decisionFor } from '../src/bureau.ts'
+import { submit, listHall, stamp, decisionFor, parseDecision } from '../src/bureau.ts'
 
 // A real PreToolUse payload captured during the spike.
 const writeCall = JSON.parse(readFileSync(new URL('./pretooluse-write.json', import.meta.url), 'utf8'))
@@ -44,7 +44,7 @@ test('a tool call nobody has stamped has no decision', () => {
 test('admitting a visitor allows its tool call and clears it from the hall', () => {
   submit(dir, writeCall)
 
-  admit(dir, writeCall.tool_use_id)
+  stamp(dir, writeCall.tool_use_id, { verdict: 'admit' })
 
   expect(decisionFor(dir, writeCall.tool_use_id)).toEqual({ verdict: 'admit' })
   expect(listHall(dir)).toEqual([])
@@ -52,12 +52,12 @@ test('admitting a visitor allows its tool call and clears it from the hall', () 
 
 test('tool use ids that could escape the state directory are rejected', () => {
   expect(() => submit(dir, { ...writeCall, tool_use_id: '../../etc/x' })).toThrow(/tool use id/)
-  expect(() => admit(dir, '../hall/x')).toThrow(/tool use id/)
+  expect(() => stamp(dir, '../hall/x', { verdict: 'admit' })).toThrow(/tool use id/)
   expect(() => decisionFor(dir, '../x')).toThrow(/tool use id/)
 })
 
 test('admitting a visitor who is not in the hall fails', () => {
-  expect(() => admit(dir, 'toolu_not_here')).toThrow(/not in the hall/)
+  expect(() => stamp(dir, 'toolu_not_here', { verdict: 'admit' })).toThrow(/not in the hall/)
 })
 
 test('a call that is filed again while still parked keeps its place in the queue', () => {
@@ -73,4 +73,47 @@ test('an unreadable hall file is skipped instead of breaking the hall', () => {
   writeFileSync(join(dir, 'hall', 'toolu_half_written.json'), '{"form": {"ses')
 
   expect(listHall(dir).map((v) => v.toolUseId)).toEqual([writeCall.tool_use_id])
+})
+
+test('refusing a visitor records the reason for its tool call', () => {
+  submit(dir, writeCall)
+
+  stamp(dir, writeCall.tool_use_id, { verdict: 'refuse', reason: 'No writes outside the repo.' })
+
+  expect(decisionFor(dir, writeCall.tool_use_id)).toEqual({ verdict: 'refuse', reason: 'No writes outside the repo.' })
+  expect(listHall(dir)).toEqual([])
+})
+
+test('returning a visitor records the note for its tool call', () => {
+  submit(dir, writeCall)
+
+  stamp(dir, writeCall.tool_use_id, { verdict: 'return', note: 'Write it under docs/ instead.' })
+
+  expect(decisionFor(dir, writeCall.tool_use_id)).toEqual({ verdict: 'return', note: 'Write it under docs/ instead.' })
+})
+
+test('a refusal or return without any text is rejected and the visitor keeps waiting', () => {
+  submit(dir, writeCall)
+
+  expect(() => stamp(dir, writeCall.tool_use_id, { verdict: 'refuse', reason: '  ' })).toThrow(/reason/)
+  expect(() => stamp(dir, writeCall.tool_use_id, { verdict: 'return', note: '' })).toThrow(/note/)
+  expect(decisionFor(dir, writeCall.tool_use_id)).toBeNull()
+  expect(listHall(dir)).toHaveLength(1)
+})
+
+test('a decision file that is not a valid decision is reported, never read as admitted', () => {
+  mkdirSync(join(dir, 'decisions'), { recursive: true })
+  writeFileSync(join(dir, 'decisions', 'toolu_odd.json'), '{"verdict":"refuse"}')
+
+  expect(() => decisionFor(dir, 'toolu_odd')).toThrow(/invalid decision/)
+})
+
+test('decisions from outside are parsed into one of the three verdicts or rejected', () => {
+  expect(parseDecision({ verdict: 'admit' })).toEqual({ verdict: 'admit' })
+  expect(parseDecision({ verdict: 'refuse', reason: 'no' })).toEqual({ verdict: 'refuse', reason: 'no' })
+  expect(parseDecision({ verdict: 'return', note: 'try docs/' })).toEqual({ verdict: 'return', note: 'try docs/' })
+  expect(parseDecision({ verdict: 'refuse' })).toBeNull()
+  expect(parseDecision({ verdict: 'return', reason: 'wrong field' })).toBeNull()
+  expect(parseDecision({ verdict: 'deny' })).toBeNull()
+  expect(parseDecision('admit')).toBeNull()
 })

@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { admit, listHall } from './bureau.ts'
+import { listHall, parseDecision, stamp } from './bureau.ts'
 import { matcher, port, stateDir } from './config.ts'
 import { resumeSession } from './services/claude/index.ts'
 
@@ -16,6 +16,20 @@ mkdirSync(stateDir, { recursive: true })
 writeFileSync(settingsPath, JSON.stringify({
   hooks: { PreToolUse: [{ matcher, hooks: [{ type: 'command', command: `PROMPTS_PLEASE_STATE=${shellQuote(stateDir)} node ${shellQuote(hookPath)}` }] }] },
 }, null, 2))
+
+// Rejects once the body passes the limit, but keeps draining it so the 413 can still be sent.
+function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = ''
+    let tooLarge = false
+    req.setEncoding('utf8')
+    req.on('data', (chunk: string) => { if (!tooLarge) body += chunk; if (Buffer.byteLength(body) > limit) tooLarge = true })
+    req.on('end', () => (tooLarge ? reject(new Error('too large')) : resolve(body)))
+    req.on('error', reject)
+  })
+}
+
+const parseJson = (raw: string): unknown => { try { return JSON.parse(raw) } catch { return null } }
 
 const send = (res: ServerResponse, status: number, body: unknown) =>
   res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
@@ -34,12 +48,20 @@ createServer((req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/api/hall') return send(res, 200, listHall(stateDir))
 
-  const stamp = url.pathname.match(/^\/api\/hall\/([^/]+)\/admit$/)
-  if (req.method === 'POST' && stamp) {
-    let form
-    try { form = admit(stateDir, decodeURIComponent(stamp[1])) } catch (e) { return send(res, 404, { error: (e as Error).message }) }
-    resumeSession({ sessionId: form.session_id, cwd: form.cwd, settingsPath, stateDir })
-    return send(res, 200, { admitted: form.tool_use_id })
+  const stampRoute = url.pathname.match(/^\/api\/hall\/([^/]+)\/stamp$/)
+  if (req.method === 'POST' && stampRoute) {
+    readBody(req).then((raw) => {
+      const decision = parseDecision(parseJson(raw))
+      if (!decision) return send(res, 400, { error: 'body must be {"verdict":"admit"} | {"verdict":"refuse","reason":…} | {"verdict":"return","note":…}' })
+      let form
+      try { form = stamp(stateDir, decodeURIComponent(stampRoute[1]), decision) } catch (e) {
+        const message = (e as Error).message
+        return send(res, /not in the hall/.test(message) ? 404 : 400, { error: message })
+      }
+      resumeSession({ sessionId: form.session_id, cwd: form.cwd, settingsPath, stateDir })
+      send(res, 200, { stamped: form.tool_use_id, verdict: decision.verdict })
+    }, () => send(res, 413, { error: 'body too large' }))
+    return
   }
 
   send(res, 404, { error: 'not found' })

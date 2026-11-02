@@ -25,7 +25,10 @@ export type Visitor = {
 
 type HallEntry = { form: PermissionForm; arrivedAt: string }
 
-export type Decision = { verdict: 'admit' }
+export type Decision =
+  | { verdict: 'admit' }
+  | { verdict: 'refuse'; reason: string }
+  | { verdict: 'return'; note: string }
 
 const hallDir = (dir: string) => join(dir, 'hall')
 const decisionsDir = (dir: string) => join(dir, 'decisions')
@@ -74,24 +77,37 @@ export function listHall(dir: string, now = new Date()): Visitor[] {
     .sort((a, b) => a.arrivedAt.localeCompare(b.arrivedAt))
 }
 
-/** Stamp a waiting visitor Admit. Returns its form so the caller can resume the session. */
-export function admit(dir: string, toolUseId: string): PermissionForm {
+/** Stamp a waiting visitor. Returns its form so the caller can resume the session. */
+export function stamp(dir: string, toolUseId: string, decision: Decision): PermissionForm {
   const hallFile = fileFor(hallDir(dir), toolUseId)
+  // The agent acts on this text, so a refusal or return must say something.
+  if (decision.verdict === 'refuse' && !decision.reason.trim()) throw new Error('a refusal needs a reason')
+  if (decision.verdict === 'return' && !decision.note.trim()) throw new Error('a return needs a note')
   const entry = readEntry(hallFile)
   if (!entry) throw new Error(`${toolUseId} is not in the hall`)
-  const { form } = entry
-  const decision: Decision = { verdict: 'admit' }
   mkdirSync(decisionsDir(dir), { recursive: true })
   writeAtomic(fileFor(decisionsDir(dir), toolUseId), decision)
   rmSync(hallFile)
-  return form
+  return entry.form
 }
 
+/** Validate untrusted data (an HTTP body, a decision file) as a Decision; null if it isn't one. */
+export function parseDecision(raw: unknown): Decision | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const r = raw as Record<string, unknown>
+  if (r.verdict === 'admit') return { verdict: 'admit' }
+  if (r.verdict === 'refuse' && typeof r.reason === 'string') return { verdict: 'refuse', reason: r.reason }
+  if (r.verdict === 'return' && typeof r.note === 'string') return { verdict: 'return', note: r.note }
+  return null
+}
+
+/** The stamp on a tool call, or null if none yet. Throws if the decision file is corrupt. */
 export function decisionFor(dir: string, toolUseId: string): Decision | null {
   const file = fileFor(decisionsDir(dir), toolUseId)
-  try {
-    return JSON.parse(readFileSync(file, 'utf8')) as Decision
-  } catch {
-    return null
-  }
+  let text: string
+  try { text = readFileSync(file, 'utf8') } catch { return null }
+  let decision: Decision | null = null
+  try { decision = parseDecision(JSON.parse(text)) } catch {}
+  if (!decision) throw new Error(`invalid decision for ${toolUseId}`)
+  return decision
 }
