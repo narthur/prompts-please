@@ -21,6 +21,8 @@ State lives in `~/.local/state/prompts-please` (override with `PROMPTS_PLEASE_ST
 
 To get a daily ledger note (for example in Obsidian), set `PROMPTS_PLEASE_SUMMARY_DIR` to a folder; the bureau rewrites `<date>.md` there after each stamp.
 
+Each visitor is a recurring character, one per project directory. To tell several agents in one project apart, launch each with `PROMPTS_PLEASE_JOB=<label>` (for example `PROMPTS_PLEASE_JOB=nightly claude -p ...`). Trust shown at the booth is display-only.
+
 ## Develop
 
 ```sh

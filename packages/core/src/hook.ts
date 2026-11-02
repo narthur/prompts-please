@@ -12,7 +12,10 @@ for (const key of ['session_id', 'cwd', 'tool_name', 'tool_use_id'] as const) {
     process.exit(2)
   }
 }
-const form = input as PermissionForm
+// job comes only from our env var, never from the payload.
+const { job: _ignored, ...payload } = input
+const job = process.env.PROMPTS_PLEASE_JOB?.trim()
+const form: PermissionForm = job ? { ...payload, job } : payload
 
 function respond(decision: Decision | null) {
   if (!decision) {

@@ -11,9 +11,15 @@ export type PermissionForm = {
   tool_name: string
   tool_input: Record<string, unknown>
   tool_use_id: string
+  /** Our addition: the job label from PROMPTS_PLEASE_JOB, set by the hook. */
+  job?: string
 }
 
-export type Visitor = Papers & { toolUseId: string; arrivedAt: string; waitSeconds: number } & (
+/** A recurring robot: one per project directory plus job label. */
+export type Character = { id: string; label: string; name: string; portrait: number }
+export type Trust = { admitted: number; complaints: number; level: 'unknown' | 'known' | 'trusted' | 'suspect' }
+
+export type Visitor = Papers & { toolUseId: string; arrivedAt: string; waitSeconds: number; character: Character; trust: Trust } & (
   | { kind: 'permission' }
   /** A complaint about an earlier admission (`against`). */
   | { kind: 'incident'; against: string; complaint: string }
@@ -23,14 +29,47 @@ export type Visitor = Papers & { toolUseId: string; arrivedAt: string; waitSecon
 export class NotFound extends Error {}
 
 /** What the visitor is carrying: the tool call it wants, or the one a complaint is about. */
-type Papers = { sessionId: string; cwd: string; toolName: string; toolInput: Record<string, unknown> }
+type Papers = { sessionId: string; cwd: string; toolName: string; toolInput: Record<string, unknown>; job?: string }
 
 type HallEntry =
   | { kind?: 'permission'; form: PermissionForm; arrivedAt: string }
   | { kind: 'incident'; id: string; against: string; complaint: string; papers: Papers; arrivedAt: string }
 
 const papersOf = (f: PermissionForm): Papers =>
-  ({ sessionId: f.session_id, cwd: f.cwd, toolName: f.tool_name, toolInput: f.tool_input })
+  ({ sessionId: f.session_id, cwd: f.cwd, toolName: f.tool_name, toolInput: f.tool_input, ...(f.job ? { job: f.job } : {}) })
+
+// FNV-1a: a stable small hash so every client draws the same robot for a character.
+function hash(text: string): number {
+  let h = 0x811c9dc5
+  for (const ch of text) h = Math.imul(h ^ ch.codePointAt(0)!, 0x01000193) >>> 0
+  return h
+}
+
+// Structured, so no cwd/job pair can collide with another; cheap, so trust can compare it per ledger line.
+const characterId = (p: { cwd: string; job?: string }) => JSON.stringify([p.cwd, p.job ?? null])
+
+export function characterOf(p: { cwd: string; job?: string }): Character {
+  const id = characterId(p)
+  const project = basename(p.cwd) || p.cwd
+  const prefix = (project.replace(/[^A-Za-z0-9]/g, '').toUpperCase() + 'XXX').slice(0, 3)
+  const h = hash(id)
+  return { id, label: p.job ? `${project}/${p.job}` : project, name: `${prefix}-${(h % 90) + 10}`, portrait: (h % 12) + 1 }
+}
+
+/** Display-only: nothing is admitted because of trust. A complaint counts unless dismissed, and its admission stops counting. */
+// ponytail: scans the whole ledger per visitor on every hall poll; index by character once if the ledger gets large.
+export function trustOf(ledger: LedgerEntry[], id: string): Trust {
+  const mine = ledger.filter((e) => characterId(e) === id)
+  const dismissed = new Set(mine.flatMap((e) => (e.type === 'stamp' && e.against && e.decision.verdict === 'refuse' ? [e.against] : [])))
+  const complainedAbout = new Set(mine.flatMap((e) => (e.type === 'complaint' && !dismissed.has(e.against) ? [e.against] : [])))
+  const admitted = mine.filter((e) => e.type === 'stamp' && !e.against && e.decision.verdict === 'admit' && !complainedAbout.has(e.toolUseId)).length
+  const complaints = complainedAbout.size
+  const level = complaints > 0 && admitted < complaints * 10 ? 'suspect'
+    : admitted >= 10 && complaints === 0 ? 'trusted'
+    : admitted < 3 ? 'unknown'
+    : 'known'
+  return { admitted, complaints, level }
+}
 
 export type Decision =
   | { verdict: 'admit' }
@@ -76,6 +115,8 @@ export function submit(dir: string, form: PermissionForm, now = new Date()): voi
 export function listHall(dir: string, now = new Date()): Visitor[] {
   let files: string[]
   try { files = readdirSync(hallDir(dir)) } catch { return [] }
+  const ledger = readLedger(dir)
+  const who = (p: Papers) => { const character = characterOf(p); return { character, trust: trustOf(ledger, character.id) } }
   return files
     .filter((f) => f.endsWith('.json'))
     .map((f) => readEntry(join(hallDir(dir), f)))
@@ -83,8 +124,8 @@ export function listHall(dir: string, now = new Date()): Visitor[] {
     .map((e): Visitor => {
       const waitSeconds = Math.floor((now.getTime() - Date.parse(e.arrivedAt)) / 1000)
       return e.kind === 'incident'
-        ? { kind: 'incident', toolUseId: e.id, against: e.against, complaint: e.complaint, ...e.papers, arrivedAt: e.arrivedAt, waitSeconds }
-        : { kind: 'permission', toolUseId: e.form.tool_use_id, ...papersOf(e.form), arrivedAt: e.arrivedAt, waitSeconds }
+        ? { kind: 'incident', toolUseId: e.id, against: e.against, complaint: e.complaint, ...e.papers, ...who(e.papers), arrivedAt: e.arrivedAt, waitSeconds }
+        : { kind: 'permission', toolUseId: e.form.tool_use_id, ...papersOf(e.form), ...who(papersOf(e.form)), arrivedAt: e.arrivedAt, waitSeconds }
     })
     .sort((a, b) => a.arrivedAt.localeCompare(b.arrivedAt))
 }
@@ -129,7 +170,7 @@ export function fileComplaint(dir: string, against: string, reason: string, now 
   if (target.against) throw new Error('an incident cannot be complained about')
   if (target.decision.verdict !== 'admit') throw new Error('only an admission can be complained about')
   if (ledger.some((e) => e.type === 'complaint' && e.against === against)) throw new Error(`${against} has already been complained about`)
-  const papers: Papers = { sessionId: target.sessionId, cwd: target.cwd, toolName: target.toolName, toolInput: target.toolInput }
+  const papers: Papers = { sessionId: target.sessionId, cwd: target.cwd, toolName: target.toolName, toolInput: target.toolInput, ...(target.job ? { job: target.job } : {}) }
   const at = now.toISOString()
   // Record first: the ledger is what stops a second complaint, so it must never miss one.
   appendLedger(dir, { type: 'complaint', at, toolUseId: id, against, reason, ...papers })
@@ -167,6 +208,7 @@ export function readLedger(dir: string): LedgerEntry[] {
     try { e = JSON.parse(line) } catch { return [] }
     const strings = ['toolUseId', 'at', 'sessionId', 'cwd', 'toolName'].every((k) => typeof e?.[k] === 'string')
     if (!e || !strings || typeof e.toolInput !== 'object' || e.toolInput === null) return []
+    if (e.job !== undefined && typeof e.job !== 'string') return []
     const ok = e.type === 'stamp' ? parseDecision(e.decision) !== null
       : e.type === 'complaint' && typeof e.against === 'string' && typeof e.reason === 'string'
     return ok ? [e as LedgerEntry] : []

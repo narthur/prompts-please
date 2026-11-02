@@ -9,11 +9,13 @@ type Visitor = {
   toolName: string
   toolInput: Record<string, unknown>
   waitSeconds: number
+  character: { label: string; name: string; portrait: number }
+  trust: { admitted: number; complaints: number; level: 'unknown' | 'known' | 'trusted' | 'suspect' }
 } & ({ kind: 'permission' } | { kind: 'incident'; against: string; complaint: string })
 
 type Verdict = 'admit' | 'refuse' | 'return'
 // Shape of core's GET /api/ledger entries (only the fields the booth shows).
-type LedgerEntry = { at: string; toolUseId: string; toolName: string; cwd: string } & (
+type LedgerEntry = { at: string; toolUseId: string; toolName: string; cwd: string; job?: string } & (
   | { type: 'stamp'; against?: string; decision: { verdict: Verdict; reason?: string; note?: string } }
   | { type: 'complaint'; against: string; reason: string }
 )
@@ -68,7 +70,7 @@ function render() {
   if (!hall.some((v) => v.toolUseId === selectedId)) selectedId = hall[0]?.toolUseId ?? null
 
   hallEl.replaceChildren(...hall.map((v) => {
-    const li = el('li', `${v.kind === 'incident' ? 'INCIDENT · ' : ''}${v.toolName} · ${v.cwd.split('/').pop()} · ${v.waitSeconds}s`)
+    const li = el('li', `${v.kind === 'incident' ? 'INCIDENT · ' : ''}${v.character.name} · ${v.toolName} · ${v.character.label} · ${v.waitSeconds}s`)
     li.classList.toggle('selected', v.toolUseId === selectedId)
     li.onclick = () => { selectedId = v.toolUseId; render() }
     return li
@@ -100,7 +102,14 @@ function render() {
   stamps.className = 'stamps'
   if (v.kind === 'incident') stamps.append(button('admit', 'Uphold'), button('refuse', 'Dismiss'))
   else stamps.append(button('admit', 'Admit'), button('refuse', 'Refuse'), button('return', 'Return with note'))
+  const portrait = el('img')
+  portrait.src = `/characters/portraits/portrait-${v.character.portrait}.png`
+  portrait.alt = ''
+  portrait.className = 'portrait'
+  const t = v.trust
   papersEl.replaceChildren(
+    portrait,
+    el('p', `${v.character.name} (${v.character.label}): ${t.level}, ${t.admitted} admitted, ${t.complaints} complaint${t.complaints === 1 ? '' : 's'}`),
     ...(v.kind === 'incident'
       ? [el('h3', 'Incident report'), el('p', `Complaint about stamp ${v.against}: ${v.complaint}`), el('p', 'Admit upholds the complaint; Refuse dismisses it.')]
       : [el('h3', `${v.toolName} request`)]),
@@ -125,7 +134,7 @@ function renderLedger(entries: LedgerEntry[]) {
   const complained = new Set(entries.filter((e) => e.type === 'complaint').map((e) => e.against))
   ledgerEl.replaceChildren(...entries.slice().reverse().map((e) => {
     const time = new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    const where = `${e.toolName} · ${e.cwd.split('/').pop()}`
+    const where = `${e.toolName} · ${e.cwd.split('/').pop()}${e.job ? `/${e.job}` : ''}`
     if (e.type === 'complaint') return el('li', `${time} COMPLAINT about ${where} — ${e.reason}`)
     const text = e.decision.reason ?? e.decision.note
     const verb = e.against ? { admit: 'UPHELD', refuse: 'DISMISSED', return: 'RETURNED' }[e.decision.verdict] : e.decision.verdict.toUpperCase()
