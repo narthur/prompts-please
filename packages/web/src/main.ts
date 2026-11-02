@@ -201,5 +201,21 @@ async function complain(toolUseId: string) {
   await refresh()
 }
 
+async function scanReverts() {
+  try {
+    const res = await fetch('/api/reverts/scan', { method: 'POST', headers: { 'X-Prompts-Please': '1' } })
+    if (!res.ok) return alert(`Scan failed: ${await errorText(res)}`)
+    const { incidents, errors } = await res.json()
+    alert([
+      incidents.length ? `${incidents.length} complaint(s) filed from reverts.` : 'No new reverts of admitted work.',
+      ...errors.map((e: string) => `Failed: ${e}`),
+    ].join('\n'))
+  } catch {
+    alert('Scan failed: bureau unreachable')
+  }
+  await refresh()
+}
+document.querySelector<HTMLButtonElement>('#scan-reverts')!.onclick = scanReverts
+
 refresh()
 setInterval(refresh, 2000)

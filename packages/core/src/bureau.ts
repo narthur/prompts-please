@@ -91,7 +91,7 @@ const ledgerFile = (dir: string) => join(dir, 'ledger.jsonl')
 
 export type LedgerEntry = Papers & (
   /** A verdict on a visitor; `against` is set when the visitor was an incident. */
-  | { type: 'stamp'; at: string; toolUseId: string; against?: string; decision: Decision }
+  | { type: 'stamp'; at: string; toolUseId: string; against?: string; decision: Decision; covers?: string[] }
   /** A complaint against an earlier stamp; toolUseId is the incident visitor it created. */
   | { type: 'complaint'; at: string; toolUseId: string; against: string; reason: string }
 )
@@ -158,7 +158,7 @@ export function stamp(dir: string, toolUseId: string, decision: Decision, now = 
   const record: LedgerEntry = entry.kind === 'incident'
     ? { type: 'stamp', at, toolUseId, against: entry.against, ...entry.papers, decision }
     : entry.kind === 'finished'
-    ? { type: 'stamp', at, toolUseId, ...entry.papers, decision }
+    ? { type: 'stamp', at, toolUseId, ...entry.papers, decision, covers: [entry.papers.toolInput.commits].flat().filter((c): c is string => typeof c === 'string') }
     : { type: 'stamp', at, toolUseId, ...papersOf(entry.form), decision }
   if (entry.kind !== 'incident' && entry.kind !== 'finished') {
     mkdirSync(decisionsDir(dir), { recursive: true })
@@ -215,6 +215,37 @@ export function fileComplaint(dir: string, against: string, reason: string, now 
   return id
 }
 
+/** Reads reverts out of a repo's history; the git service in production, a fake in tests. */
+export type RevertSource = { reverts(cwd: string): { sha: string; reverted: string[] }[] }
+
+/**
+ * Raise a complaint for each admission whose covered commits have been reverted, once per admission.
+ * Scans only repos that have admissions with covered commits. Returns the new incident ids, and the
+ * errors of any complaint that couldn't be filed (the others still are).
+ */
+// ponytail: matches the agent's own commit SHAs; reverting a squash or merge commit (GitHub's Revert
+// button) isn't seen. Record the PR an admission covered once a GitHub service exists, and match that too.
+export function matchReverts(dir: string, git: RevertSource, now = new Date()): { incidents: string[]; errors: string[] } {
+  const ledger = readLedger(dir)
+  const complained = new Set(ledger.flatMap((e) => (e.type === 'complaint' ? [e.against] : [])))
+  const admissions = ledger.filter((e) => e.type === 'stamp' && !e.against && e.decision.verdict === 'admit' && e.covers?.length)
+  const raised: string[] = []
+  const errors: string[] = []
+  for (const cwd of new Set(admissions.map((e) => e.cwd))) {
+    for (const revert of git.reverts(cwd)) {
+      for (const sha of revert.reverted) {
+        // A revert message may name the commit by an abbreviated SHA.
+        const admission = admissions.find((e) => e.cwd === cwd && e.type === 'stamp' && e.covers!.some((c) => c.startsWith(sha)) && !complained.has(e.toolUseId))
+        if (!admission) continue
+        complained.add(admission.toolUseId)
+        try { raised.push(fileComplaint(dir, admission.toolUseId, `Commit ${sha.slice(0, 7)} was reverted by ${revert.sha.slice(0, 7)}.`, now)) }
+        catch (e) { errors.push(`${admission.toolUseId}: ${(e as Error).message}`) }
+      }
+    }
+  }
+  return { incidents: raised, errors }
+}
+
 /** Validate untrusted data (an HTTP body, a decision file) as a Decision; null if it isn't one. */
 export function parseDecision(raw: unknown): Decision | null {
   if (typeof raw !== 'object' || raw === null) return null
@@ -245,6 +276,7 @@ export function readLedger(dir: string): LedgerEntry[] {
     const strings = ['toolUseId', 'at', 'sessionId', 'cwd', 'toolName'].every((k) => typeof e?.[k] === 'string')
     if (!e || !strings || typeof e.toolInput !== 'object' || e.toolInput === null) return []
     if (e.job !== undefined && typeof e.job !== 'string') return []
+    if (e.covers !== undefined && !(Array.isArray(e.covers) && e.covers.every((c) => typeof c === 'string'))) return []
     const ok = e.type === 'stamp' ? parseDecision(e.decision) !== null
       : e.type === 'complaint' && typeof e.against === 'string' && typeof e.reason === 'string'
     return ok ? [e as LedgerEntry] : []

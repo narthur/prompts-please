@@ -3,10 +3,11 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { dailySummary, fileComplaint, listHall, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
+import { dailySummary, fileComplaint, listHall, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
 import { matcher, port, stateDir, summaryDir } from './config.ts'
 import { resumeSession } from './services/claude/index.ts'
 import { writeDailySummary } from './services/vault/index.ts'
+import * as git from './services/git/index.ts'
 
 const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`
 
@@ -50,6 +51,16 @@ function trusted(req: IncomingMessage): boolean {
 
 const sendError = (res: ServerResponse, e: unknown) =>
   send(res, e instanceof NotFound ? 404 : 400, { error: (e as Error).message })
+
+// ponytail: runs on start and when the booth asks; schedule it if reverts should surface unprompted.
+function scanReverts(): { incidents: string[]; errors: string[] } {
+  const now = new Date()
+  let result: { incidents: string[]; errors: string[] }
+  try { result = matchReverts(stateDir, git, now) } catch (e) { result = { incidents: [], errors: [(e as Error).message] } }
+  for (const e of result.errors) console.error(`revert scan: ${e}`)
+  if (result.incidents.length) refreshSummary(now)
+  return result
+}
 
 function refreshSummary(now: Date) {
   if (!summaryDir) return
@@ -99,8 +110,12 @@ createServer((req, res) => {
     return
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/reverts/scan') return send(res, 200, scanReverts())
+
   send(res, 404, { error: 'not found' })
 }).listen(port, '127.0.0.1', () => {
+  const { incidents } = scanReverts()
+  if (incidents.length) console.log(`Reverts found: ${incidents.length} complaint(s) filed`)
   console.log(`Bureau open on http://127.0.0.1:${port}  (state: ${stateDir})`)
   console.log(`Launch agents with: claude -p "<task>" --settings ${settingsPath}`)
 })
