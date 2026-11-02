@@ -1,0 +1,13 @@
+{
+  "name": "@prompts-please/core",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
+  }
+}

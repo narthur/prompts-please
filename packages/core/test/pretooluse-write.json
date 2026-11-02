@@ -1,0 +1,17 @@
+{
+ "session_id": "6d22fe94-edc1-49a9-8d33-808ad8456087",
+ "transcript_path": "/Users/narthur/.claude/projects/-private-tmp-claude-501--Users-narthur-79e29774-c9ed-417e-9388-4aa046bf97bc-scratchpad-spike-work/6d22fe94-edc1-49a9-8d33-808ad8456087.jsonl",
+ "cwd": "/private/tmp/claude-501/-Users-narthur/79e29774-c9ed-417e-9388-4aa046bf97bc/scratchpad/spike/work",
+ "prompt_id": "462ab44c-c3ee-4868-830e-50cc30c2a6e2",
+ "permission_mode": "auto",
+ "effort": {
+  "level": "medium"
+ },
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Write",
+ "tool_input": {
+  "file_path": "/private/tmp/claude-501/-Users-narthur/79e29774-c9ed-417e-9388-4aa046bf97bc/scratchpad/spike/work/spike.txt",
+  "content": "hello from the booth"
+ },
+ "tool_use_id": "toolu_01MDQCbC7memBX28KVjwa442"
+}
