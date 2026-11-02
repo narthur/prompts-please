@@ -13,17 +13,24 @@ export type PermissionForm = {
   tool_use_id: string
 }
 
-export type Visitor = {
-  toolUseId: string
-  sessionId: string
-  cwd: string
-  toolName: string
-  toolInput: Record<string, unknown>
-  arrivedAt: string
-  waitSeconds: number
-}
+export type Visitor = Papers & { toolUseId: string; arrivedAt: string; waitSeconds: number } & (
+  | { kind: 'permission' }
+  /** A complaint about an earlier admission (`against`). */
+  | { kind: 'incident'; against: string; complaint: string }
+)
 
-type HallEntry = { form: PermissionForm; arrivedAt: string }
+/** Thrown when the visitor or stamp asked for doesn't exist (HTTP 404). */
+export class NotFound extends Error {}
+
+/** What the visitor is carrying: the tool call it wants, or the one a complaint is about. */
+type Papers = { sessionId: string; cwd: string; toolName: string; toolInput: Record<string, unknown> }
+
+type HallEntry =
+  | { kind?: 'permission'; form: PermissionForm; arrivedAt: string }
+  | { kind: 'incident'; id: string; against: string; complaint: string; papers: Papers; arrivedAt: string }
+
+const papersOf = (f: PermissionForm): Papers =>
+  ({ sessionId: f.session_id, cwd: f.cwd, toolName: f.tool_name, toolInput: f.tool_input })
 
 export type Decision =
   | { verdict: 'admit' }
@@ -34,16 +41,12 @@ const hallDir = (dir: string) => join(dir, 'hall')
 const decisionsDir = (dir: string) => join(dir, 'decisions')
 const ledgerFile = (dir: string) => join(dir, 'ledger.jsonl')
 
-export type LedgerEntry = {
-  type: 'stamp'
-  at: string
-  toolUseId: string
-  sessionId: string
-  cwd: string
-  toolName: string
-  toolInput: Record<string, unknown>
-  decision: Decision
-}
+export type LedgerEntry = Papers & (
+  /** A verdict on a visitor; `against` is set when the visitor was an incident. */
+  | { type: 'stamp'; at: string; toolUseId: string; against?: string; decision: Decision }
+  /** A complaint against an earlier stamp; toolUseId is the incident visitor it created. */
+  | { type: 'complaint'; at: string; toolUseId: string; against: string; reason: string }
+)
 
 // Ids become file names, so only allow the characters Claude Code uses (toolu_...).
 function fileFor(folder: string, toolUseId: string): string {
@@ -67,7 +70,7 @@ export function submit(dir: string, form: PermissionForm, now = new Date()): voi
   const file = fileFor(hallDir(dir), form.tool_use_id)
   // The hook re-files a still-parked call on every resume; keep its original arrival.
   const arrivedAt = readEntry(file)?.arrivedAt ?? now.toISOString()
-  writeAtomic(file, { form, arrivedAt } satisfies HallEntry)
+  writeAtomic(file, { kind: 'permission', form, arrivedAt } satisfies HallEntry)
 }
 
 export function listHall(dir: string, now = new Date()): Visitor[] {
@@ -77,38 +80,62 @@ export function listHall(dir: string, now = new Date()): Visitor[] {
     .filter((f) => f.endsWith('.json'))
     .map((f) => readEntry(join(hallDir(dir), f)))
     .filter((e): e is HallEntry => e !== null)
-    .map(({ form, arrivedAt }) => ({
-      toolUseId: form.tool_use_id,
-      sessionId: form.session_id,
-      cwd: form.cwd,
-      toolName: form.tool_name,
-      toolInput: form.tool_input,
-      arrivedAt,
-      waitSeconds: Math.floor((now.getTime() - Date.parse(arrivedAt)) / 1000),
-    }))
+    .map((e): Visitor => {
+      const waitSeconds = Math.floor((now.getTime() - Date.parse(e.arrivedAt)) / 1000)
+      return e.kind === 'incident'
+        ? { kind: 'incident', toolUseId: e.id, against: e.against, complaint: e.complaint, ...e.papers, arrivedAt: e.arrivedAt, waitSeconds }
+        : { kind: 'permission', toolUseId: e.form.tool_use_id, ...papersOf(e.form), arrivedAt: e.arrivedAt, waitSeconds }
+    })
     .sort((a, b) => a.arrivedAt.localeCompare(b.arrivedAt))
 }
 
-/** Stamp a waiting visitor. Returns its form so the caller can resume the session. */
-export function stamp(dir: string, toolUseId: string, decision: Decision, now = new Date()): PermissionForm {
+/**
+ * Stamp a waiting visitor. Returns the tool call's form so the caller can resume its session,
+ * or null for an incident (Admit upholds the complaint, Refuse dismisses it; no session resumes).
+ */
+export function stamp(dir: string, toolUseId: string, decision: Decision, now = new Date()): PermissionForm | null {
   const hallFile = fileFor(hallDir(dir), toolUseId)
   // The agent acts on this text, so a refusal or return must say something.
   if (decision.verdict === 'refuse' && !decision.reason.trim()) throw new Error('a refusal needs a reason')
   if (decision.verdict === 'return' && !decision.note.trim()) throw new Error('a return needs a note')
   const entry = readEntry(hallFile)
-  if (!entry) throw new Error(`${toolUseId} is not in the hall`)
-  mkdirSync(decisionsDir(dir), { recursive: true })
-  writeAtomic(fileFor(decisionsDir(dir), toolUseId), decision)
-  const { form } = entry
-  const record: LedgerEntry = {
-    type: 'stamp', at: now.toISOString(), toolUseId, sessionId: form.session_id, cwd: form.cwd,
-    toolName: form.tool_name, toolInput: form.tool_input, decision,
+  if (!entry) throw new NotFound(`${toolUseId} is not in the hall`)
+  if (entry.kind === 'incident' && decision.verdict === 'return') throw new Error('an incident is upheld or dismissed, not returned')
+  const at = now.toISOString()
+  const record: LedgerEntry = entry.kind === 'incident'
+    ? { type: 'stamp', at, toolUseId, against: entry.against, ...entry.papers, decision }
+    : { type: 'stamp', at, toolUseId, ...papersOf(entry.form), decision }
+  if (entry.kind !== 'incident') {
+    mkdirSync(decisionsDir(dir), { recursive: true })
+    writeAtomic(fileFor(decisionsDir(dir), toolUseId), decision)
   }
   // Leave the hall before recording, so a failure can't lead to the same stamp being recorded twice.
-  // Only the server stamps, so appends never race.
+  // Only the server writes the ledger, so appends never race.
   rmSync(hallFile)
-  appendFileSync(ledgerFile(dir), JSON.stringify(record) + '\n')
-  return form
+  appendLedger(dir, record)
+  return entry.kind === 'incident' ? null : entry.form
+}
+
+const appendLedger = (dir: string, record: LedgerEntry) => appendFileSync(ledgerFile(dir), JSON.stringify(record) + '\n')
+
+/** Complain about an earlier stamp. Sends an incident visitor to the hall and returns its id. */
+export function fileComplaint(dir: string, against: string, reason: string, now = new Date()): string {
+  if (!reason.trim()) throw new Error('a complaint needs a reason')
+  const id = `inc_${against}`
+  fileFor(hallDir(dir), id) // validates the id before anything is read or written
+  const ledger = readLedger(dir)
+  const target = ledger.find((e) => e.type === 'stamp' && e.toolUseId === against)
+  if (!target || target.type !== 'stamp') throw new NotFound(`there is no stamp ${against} to complain about`)
+  if (target.against) throw new Error('an incident cannot be complained about')
+  if (target.decision.verdict !== 'admit') throw new Error('only an admission can be complained about')
+  if (ledger.some((e) => e.type === 'complaint' && e.against === against)) throw new Error(`${against} has already been complained about`)
+  const papers: Papers = { sessionId: target.sessionId, cwd: target.cwd, toolName: target.toolName, toolInput: target.toolInput }
+  const at = now.toISOString()
+  // Record first: the ledger is what stops a second complaint, so it must never miss one.
+  appendLedger(dir, { type: 'complaint', at, toolUseId: id, against, reason, ...papers })
+  mkdirSync(hallDir(dir), { recursive: true })
+  writeAtomic(fileFor(hallDir(dir), id), { kind: 'incident', id, against, complaint: reason, papers, arrivedAt: at } satisfies HallEntry)
+  return id
 }
 
 /** Validate untrusted data (an HTTP body, a decision file) as a Decision; null if it isn't one. */
@@ -136,9 +163,12 @@ export function readLedger(dir: string): LedgerEntry[] {
   let text: string
   try { text = readFileSync(ledgerFile(dir), 'utf8') } catch { return [] }
   return text.split('\n').flatMap((line) => {
-    let e: Partial<LedgerEntry> | null
+    let e: Record<string, unknown> | null
     try { e = JSON.parse(line) } catch { return [] }
-    const ok = e?.type === 'stamp' && typeof e.toolUseId === 'string' && typeof e.at === 'string' && parseDecision(e.decision)
+    const strings = ['toolUseId', 'at', 'sessionId', 'cwd', 'toolName'].every((k) => typeof e?.[k] === 'string')
+    if (!e || !strings || typeof e.toolInput !== 'object' || e.toolInput === null) return []
+    const ok = e.type === 'stamp' ? parseDecision(e.decision) !== null
+      : e.type === 'complaint' && typeof e.against === 'string' && typeof e.reason === 'string'
     return ok ? [e as LedgerEntry] : []
   })
 }
@@ -147,23 +177,33 @@ export function readLedger(dir: string): LedgerEntry[] {
 const escapeMd = (t: string) => t.replace(/\s*\n\s*/g, ' ').replace(/[\\`*_[\]<>|#]/g, '\\$&')
 
 const VERB = { admit: 'Admit', refuse: 'Refuse', return: 'Return' } as const
+const INCIDENT_VERB = { admit: 'Uphold', refuse: 'Dismiss', return: 'Return' } as const // return is rejected by stamp()
 
 /** Markdown for one local-time day of the ledger (date as YYYY-MM-DD). */
 export function dailySummary(entries: LedgerEntry[], date: string): string {
   const day = entries.filter((e) => new Date(e.at).toLocaleDateString('sv-SE') === date)
-  const count = (v: Decision['verdict']) => day.filter((e) => e.decision.verdict === v).length
+  const stamps = day.flatMap((e) => (e.type === 'stamp' ? [e] : []))
+  const calls = stamps.filter((e) => !e.against)
+  const incidents = stamps.filter((e) => e.against)
+  const complaints = day.length - stamps.length
+  const count = (list: typeof stamps, v: Decision['verdict']) => list.filter((e) => e.decision.verdict === v).length
   const lines = day.map((e) => {
     const time = new Date(e.at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
+    const where = `${escapeMd(e.toolName)} in \`${basename(e.cwd).replaceAll('`', "'")}\``
+    if (e.type === 'complaint') return `- ${time} **Complaint** against ${where}: ${escapeMd(e.reason)}`
     const d = e.decision
     const text = d.verdict === 'refuse' ? d.reason : d.verdict === 'return' ? d.note : ''
-    return `- ${time} **${VERB[d.verdict]}** ${escapeMd(e.toolName)} in \`${basename(e.cwd).replaceAll('`', "'")}\`${text && `: ${escapeMd(text)}`}`
+    return `- ${time} **${(e.against ? INCIDENT_VERB : VERB)[d.verdict]}** ${e.against ? 'complaint about ' : ''}${where}${text && `: ${escapeMd(text)}`}`
   })
   return [
     `# Bureau ledger ${date}`,
     '',
     '_Generated by Prompts Please after each stamp; edits here are overwritten._',
     '',
-    `${day.length} stamp${day.length === 1 ? '' : 's'}: ${count('admit')} admitted, ${count('refuse')} refused, ${count('return')} returned.`,
+    `${calls.length} stamp${calls.length === 1 ? '' : 's'}: ${count(calls, 'admit')} admitted, ${count(calls, 'refuse')} refused, ${count(calls, 'return')} returned.`
+      + (complaints || incidents.length
+        ? ` ${complaints} complaint${complaints === 1 ? '' : 's'} filed: ${count(incidents, 'admit')} upheld, ${count(incidents, 'refuse')} dismissed.`
+        : ''),
     '',
     ...lines,
     '',

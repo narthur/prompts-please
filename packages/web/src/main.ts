@@ -9,16 +9,14 @@ type Visitor = {
   toolName: string
   toolInput: Record<string, unknown>
   waitSeconds: number
-}
+} & ({ kind: 'permission' } | { kind: 'incident'; against: string; complaint: string })
 
 type Verdict = 'admit' | 'refuse' | 'return'
 // Shape of core's GET /api/ledger entries (only the fields the booth shows).
-type LedgerEntry = {
-  at: string
-  toolName: string
-  cwd: string
-  decision: { verdict: Verdict; reason?: string; note?: string }
-}
+type LedgerEntry = { at: string; toolUseId: string; toolName: string; cwd: string } & (
+  | { type: 'stamp'; against?: string; decision: { verdict: Verdict; reason?: string; note?: string } }
+  | { type: 'complaint'; against: string; reason: string }
+)
 
 let hall: Visitor[] = []
 let selectedId: string | null = null
@@ -70,7 +68,7 @@ function render() {
   if (!hall.some((v) => v.toolUseId === selectedId)) selectedId = hall[0]?.toolUseId ?? null
 
   hallEl.replaceChildren(...hall.map((v) => {
-    const li = el('li', `${v.toolName} · ${v.cwd.split('/').pop()} · ${v.waitSeconds}s`)
+    const li = el('li', `${v.kind === 'incident' ? 'INCIDENT · ' : ''}${v.toolName} · ${v.cwd.split('/').pop()} · ${v.waitSeconds}s`)
     li.classList.toggle('selected', v.toolUseId === selectedId)
     li.onclick = () => { selectedId = v.toolUseId; render() }
     return li
@@ -84,7 +82,7 @@ function render() {
   const v = hall.find((x) => x.toolUseId === selectedId)
   if (!v) return papersEl.replaceChildren(el('p', 'The hall is empty.'))
   const note = el('textarea')
-  note.placeholder = 'Reason or note for the agent (needed to Refuse or Return)'
+  note.placeholder = v.kind === 'incident' ? 'Reason (needed to Dismiss)' : 'Reason or note for the agent (needed to Refuse or Return)'
   note.rows = 3
   note.value = drafts.get(v.toolUseId) ?? ''
   note.oninput = () => drafts.set(v.toolUseId, note.value)
@@ -100,9 +98,12 @@ function render() {
   }
   const stamps = el('div')
   stamps.className = 'stamps'
-  stamps.append(button('admit', 'Admit'), button('refuse', 'Refuse'), button('return', 'Return with note'))
+  if (v.kind === 'incident') stamps.append(button('admit', 'Uphold'), button('refuse', 'Dismiss'))
+  else stamps.append(button('admit', 'Admit'), button('refuse', 'Refuse'), button('return', 'Return with note'))
   papersEl.replaceChildren(
-    el('h3', `${v.toolName} request`),
+    ...(v.kind === 'incident'
+      ? [el('h3', 'Incident report'), el('p', `Complaint about stamp ${v.against}: ${v.complaint}`), el('p', 'Admit upholds the complaint; Refuse dismisses it.')]
+      : [el('h3', `${v.toolName} request`)]),
     el('p', `Project: ${v.cwd}`),
     el('p', `Session: ${v.sessionId}`),
     el('pre', JSON.stringify(v.toolInput, null, 2)),
@@ -121,10 +122,21 @@ function renderLedger(entries: LedgerEntry[]) {
   const key = `${entries.length}|${entries.at(-1)?.at}`
   if (key === ledgerKey) return // unchanged; don't rebuild on every poll
   ledgerKey = key
+  const complained = new Set(entries.filter((e) => e.type === 'complaint').map((e) => e.against))
   ledgerEl.replaceChildren(...entries.slice().reverse().map((e) => {
     const time = new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const where = `${e.toolName} · ${e.cwd.split('/').pop()}`
+    if (e.type === 'complaint') return el('li', `${time} COMPLAINT about ${where} — ${e.reason}`)
     const text = e.decision.reason ?? e.decision.note
-    return el('li', `${time} ${e.decision.verdict.toUpperCase()} ${e.toolName} · ${e.cwd.split('/').pop()}${text ? ` — ${text}` : ''}`)
+    const verb = e.against ? { admit: 'UPHELD', refuse: 'DISMISSED', return: 'RETURNED' }[e.decision.verdict] : e.decision.verdict.toUpperCase()
+    const li = el('li', `${time} ${verb} ${e.against ? 'complaint about ' : ''}${where}${text ? ` — ${text}` : ''} `)
+    if (!e.against && e.decision.verdict === 'admit' && !complained.has(e.toolUseId)) {
+      const b = el('button', 'File complaint')
+      b.className = 'small'
+      b.onclick = () => complain(e.toolUseId)
+      li.append(b)
+    }
+    return li
   }))
 }
 
@@ -157,6 +169,22 @@ async function stamp(toolUseId: string, verdict: Verdict, text: string) {
     alert('Stamp failed: bureau unreachable')
   }
   stamping = false
+  await refresh()
+}
+
+async function complain(toolUseId: string) {
+  const reason = prompt('What went wrong with this admission?')
+  if (!reason?.trim()) return
+  try {
+    const res = await fetch(`/api/ledger/${encodeURIComponent(toolUseId)}/complaint`, {
+      method: 'POST',
+      headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    })
+    if (!res.ok) alert(`Complaint failed: ${await errorText(res)}`)
+  } catch {
+    alert('Complaint failed: bureau unreachable')
+  }
   await refresh()
 }
 

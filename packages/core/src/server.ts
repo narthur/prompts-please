@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { dailySummary, listHall, parseDecision, readLedger, stamp } from './bureau.ts'
+import { dailySummary, fileComplaint, listHall, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
 import { matcher, port, stateDir, summaryDir } from './config.ts'
 import { resumeSession } from './services/claude/index.ts'
 import { writeDailySummary } from './services/vault/index.ts'
@@ -43,6 +43,16 @@ function trusted(req: IncomingMessage): boolean {
   return req.method !== 'POST' || req.headers['x-prompts-please'] === '1'
 }
 
+const sendError = (res: ServerResponse, e: unknown) =>
+  send(res, e instanceof NotFound ? 404 : 400, { error: (e as Error).message })
+
+function refreshSummary(now: Date) {
+  if (!summaryDir) return
+  const today = now.toLocaleDateString('sv-SE')
+  // ponytail: re-reads the whole ledger per write; read only the tail if the ledger gets large.
+  try { writeDailySummary(summaryDir, today, dailySummary(readLedger(stateDir), today)) } catch (e) { console.error(`daily summary failed: ${(e as Error).message}`) }
+}
+
 createServer((req, res) => {
   if (!trusted(req)) return send(res, 403, { error: 'forbidden' })
   const url = new URL(req.url ?? '/', 'http://localhost')
@@ -59,19 +69,27 @@ createServer((req, res) => {
     readBody(req).then((raw) => {
       const decision = parseDecision(parseJson(raw))
       if (!decision) return send(res, 400, { error: 'body must be {"verdict":"admit"} | {"verdict":"refuse","reason":…} | {"verdict":"return","note":…}' })
-      let form
+      const id = decodeURIComponent(stampRoute[1])
       const now = new Date() // one clock reading, so the stamp lands in the note for its own day
-      try { form = stamp(stateDir, decodeURIComponent(stampRoute[1]), decision, now) } catch (e) {
-        const message = (e as Error).message
-        return send(res, /not in the hall/.test(message) ? 404 : 400, { error: message })
-      }
-      resumeSession({ sessionId: form.session_id, cwd: form.cwd, settingsPath, stateDir })
-      if (summaryDir) {
-        const today = now.toLocaleDateString('sv-SE')
-        // ponytail: re-reads the whole ledger per stamp; read only the tail if the ledger gets large.
-        try { writeDailySummary(summaryDir, today, dailySummary(readLedger(stateDir), today)) } catch (e) { console.error(`daily summary failed: ${(e as Error).message}`) }
-      }
-      send(res, 200, { stamped: form.tool_use_id, verdict: decision.verdict })
+      let form
+      try { form = stamp(stateDir, id, decision, now) } catch (e) { return sendError(res, e) }
+      if (form) resumeSession({ sessionId: form.session_id, cwd: form.cwd, settingsPath, stateDir })
+      refreshSummary(now)
+      send(res, 200, { stamped: id, verdict: decision.verdict })
+    }, () => send(res, 413, { error: 'body too large' }))
+    return
+  }
+
+  const complaintRoute = url.pathname.match(/^\/api\/ledger\/([^/]+)\/complaint$/)
+  if (req.method === 'POST' && complaintRoute) {
+    readBody(req).then((raw) => {
+      const reason = (parseJson(raw) as { reason?: unknown } | null)?.reason
+      if (typeof reason !== 'string') return send(res, 400, { error: 'body must be {"reason": string}' })
+      const now = new Date()
+      let incident
+      try { incident = fileComplaint(stateDir, decodeURIComponent(complaintRoute[1]), reason, now) } catch (e) { return sendError(res, e) }
+      refreshSummary(now)
+      send(res, 200, { incident })
     }, () => send(res, 413, { error: 'body too large' }))
     return
   }
