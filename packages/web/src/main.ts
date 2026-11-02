@@ -127,7 +127,8 @@ function render() {
 
   showBoard(selectedId) // outside the papers check below, so a failed load is retried on the next poll
   // Only rebuild the papers when the visitor changes, so polling doesn't reset scroll or selection.
-  const key = `${selectedId}|${stamping}`
+  const sel = hall.find((v) => v.toolUseId === selectedId)
+  const key = `${selectedId}|${stamping}|${sel?.stale}|${sel?.trust.level}` // a stale flip or trust change redraws
   if (key === papersKey) return
   papersKey = key
   const v = hall.find((x) => x.toolUseId === selectedId)

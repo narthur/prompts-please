@@ -58,3 +58,9 @@ test('a run that stopped on a parked tool call is not filed as finished', () => 
   expect(fileFinished(dir, { ...run, session_id: writeCall.session_id })).toBeNull()
   expect(listHall(dir).map((v) => v.kind)).toEqual(['permission'])
 })
+
+test("another session's parked tool call doesn't stop this run being filed", () => {
+  submit(dir, writeCall)
+
+  expect(fileFinished(dir, { ...run, session_id: 'some-other-session' })).toMatch(/^fin_/)
+})
