@@ -12,6 +12,13 @@ type Visitor = {
 }
 
 type Verdict = 'admit' | 'refuse' | 'return'
+// Shape of core's GET /api/ledger entries (only the fields the booth shows).
+type LedgerEntry = {
+  at: string
+  toolName: string
+  cwd: string
+  decision: { verdict: Verdict; reason?: string; note?: string }
+}
 
 let hall: Visitor[] = []
 let selectedId: string | null = null
@@ -45,6 +52,7 @@ new Phaser.Game({
 
 const hallEl = document.querySelector<HTMLUListElement>('#hall')!
 const papersEl = document.querySelector<HTMLDivElement>('#papers')!
+const ledgerEl = document.querySelector<HTMLOListElement>('#ledger')!
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = ''): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag)
@@ -107,15 +115,31 @@ async function errorText(res: Response): Promise<string> {
   try { return (await res.json()).error ?? res.statusText } catch { return `${res.status} ${res.statusText}` }
 }
 
+let ledgerKey = ''
+
+function renderLedger(entries: LedgerEntry[]) {
+  const key = `${entries.length}|${entries.at(-1)?.at}`
+  if (key === ledgerKey) return // unchanged; don't rebuild on every poll
+  ledgerKey = key
+  ledgerEl.replaceChildren(...entries.slice().reverse().map((e) => {
+    const time = new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const text = e.decision.reason ?? e.decision.note
+    return el('li', `${time} ${e.decision.verdict.toUpperCase()} ${e.toolName} · ${e.cwd.split('/').pop()}${text ? ` — ${text}` : ''}`)
+  }))
+}
+
 async function refresh() {
+  const [hallRes, ledgerRes] = await Promise.allSettled([fetch('/api/hall'), fetch('/api/ledger?limit=50')])
   try {
-    const res = await fetch('/api/hall')
-    if (res.ok) { hall = await res.json(); problem = '' }
-    else problem = `Bureau error: ${await errorText(res)}`
+    if (hallRes.status === 'rejected') problem = 'Bureau unreachable'
+    else if (hallRes.value.ok) { hall = await hallRes.value.json(); problem = '' }
+    else problem = `Bureau error: ${await errorText(hallRes.value)}`
   } catch {
-    problem = 'Bureau unreachable'
+    problem = 'Bureau sent an unreadable hall'
   }
   render()
+  // The ledger is secondary: if it fails, keep showing the last good one.
+  try { if (ledgerRes.status === 'fulfilled' && ledgerRes.value.ok) renderLedger(await ledgerRes.value.json()) } catch {}
 }
 
 async function stamp(toolUseId: string, verdict: Verdict, text: string) {

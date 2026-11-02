@@ -17,6 +17,8 @@
     button { font: inherit; padding: 6px 14px; background: #3c7a3c; color: #fff; border: 0; cursor: pointer; }
     button[data-verdict="refuse"] { background: #9a3a2e; }
     button[data-verdict="return"] { background: #8a6d2a; }
+    #ledger { padding-left: 0; list-style: none; font-size: 13px; max-height: 40vh; overflow: auto; }
+    #ledger li { padding: 3px 0; border-bottom: 1px dotted #4a4436; }
     @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -29,6 +31,8 @@
     <aside>
       <h2>Hall</h2>
       <ul id="hall"></ul>
+      <h2>Ledger</h2>
+      <ol id="ledger"></ol>
     </aside>
   </main>
   <script type="module" src="/src/main.ts"></script>

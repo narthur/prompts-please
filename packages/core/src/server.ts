@@ -3,9 +3,10 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { listHall, parseDecision, stamp } from './bureau.ts'
-import { matcher, port, stateDir } from './config.ts'
+import { dailySummary, listHall, parseDecision, readLedger, stamp } from './bureau.ts'
+import { matcher, port, stateDir, summaryDir } from './config.ts'
 import { resumeSession } from './services/claude/index.ts'
+import { writeDailySummary } from './services/vault/index.ts'
 
 const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`
 
@@ -47,6 +48,11 @@ createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost')
 
   if (req.method === 'GET' && url.pathname === '/api/hall') return send(res, 200, listHall(stateDir))
+  if (req.method === 'GET' && url.pathname === '/api/ledger') {
+    // The booth shows recent entries only; leave out toolInput (can be whole files).
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 500)
+    return send(res, 200, readLedger(stateDir).slice(-limit).map(({ toolInput, ...rest }) => rest))
+  }
 
   const stampRoute = url.pathname.match(/^\/api\/hall\/([^/]+)\/stamp$/)
   if (req.method === 'POST' && stampRoute) {
@@ -54,11 +60,17 @@ createServer((req, res) => {
       const decision = parseDecision(parseJson(raw))
       if (!decision) return send(res, 400, { error: 'body must be {"verdict":"admit"} | {"verdict":"refuse","reason":…} | {"verdict":"return","note":…}' })
       let form
-      try { form = stamp(stateDir, decodeURIComponent(stampRoute[1]), decision) } catch (e) {
+      const now = new Date() // one clock reading, so the stamp lands in the note for its own day
+      try { form = stamp(stateDir, decodeURIComponent(stampRoute[1]), decision, now) } catch (e) {
         const message = (e as Error).message
         return send(res, /not in the hall/.test(message) ? 404 : 400, { error: message })
       }
       resumeSession({ sessionId: form.session_id, cwd: form.cwd, settingsPath, stateDir })
+      if (summaryDir) {
+        const today = now.toLocaleDateString('sv-SE')
+        // ponytail: re-reads the whole ledger per stamp; read only the tail if the ledger gets large.
+        try { writeDailySummary(summaryDir, today, dailySummary(readLedger(stateDir), today)) } catch (e) { console.error(`daily summary failed: ${(e as Error).message}`) }
+      }
       send(res, 200, { stamped: form.tool_use_id, verdict: decision.verdict })
     }, () => send(res, 413, { error: 'body too large' }))
     return

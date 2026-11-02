@@ -17,7 +17,9 @@ claude -p "<task>" --settings ~/.local/state/prompts-please/agent-settings.json
 
 Run the bureau from a normal shell, not inside the Claude Code sandbox: resumed sessions need to write to `~/.claude/projects` and reach `api.anthropic.com`.
 
-State lives in `~/.local/state/prompts-please` (override with `PROMPTS_PLEASE_STATE`; port with `PROMPTS_PLEASE_PORT`).
+State lives in `~/.local/state/prompts-please` (override with `PROMPTS_PLEASE_STATE`; port with `PROMPTS_PLEASE_PORT`). Every stamp is appended to `ledger.jsonl` there.
+
+To get a daily ledger note (for example in Obsidian), set `PROMPTS_PLEASE_SUMMARY_DIR` to a folder; the bureau rewrites `<date>.md` there after each stamp.
 
 ## Develop
 
