@@ -1,7 +1,11 @@
 // The claude CLI, behind domain-shaped functions.
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
+import { matcher } from '../../config.ts'
+
+/** The claude CLI failed or gave no usable answer (HTTP 502). */
+export class Upstream extends Error {}
 
 /**
  * Resume a headless session: with no prompt, a parked tool call's hook fires again and finds the stamp;
@@ -30,4 +34,31 @@ export function resumeSession(opts: { sessionId: string; cwd: string; prompt?: s
   // Without this, a missing `claude` on PATH (ENOENT) would crash the whole bureau.
   child.on('error', (e) => console.error(`resume of ${opts.sessionId} failed to start: ${e.message}`))
   child.unref()
+}
+
+/**
+ * Ask a forked copy of a session a question and return its answer; the original session is untouched.
+ * Runs without the bureau's hooks (so the fork files no visitors), without the tools the bureau parks
+ * (so a tool call still parked in the original can't run in the fork), and without saving the fork.
+ * Each question gets a fresh fork: it doesn't see earlier questions.
+ */
+export function forkAndAsk(q: { sessionId: string; cwd: string; question: string }): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      'claude',
+      ['-p', '--resume', q.sessionId, '--fork-session', '--no-session-persistence',
+        '--disallowedTools', matcher.split('|').join(','), '--output-format', 'json'],
+      { cwd: q.cwd, timeout: 5 * 60_000, maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err) return reject(new Upstream(`interrogation failed: ${err.message}`))
+        let out: { is_error?: boolean; result?: unknown } = {}
+        try { out = JSON.parse(stdout) } catch {}
+        if (out.is_error || typeof out.result !== 'string') return reject(new Upstream(`interrogation returned no answer${out.is_error ? `: ${String(out.result ?? '')}` : ''}`))
+        resolve(out.result)
+      },
+    )
+    // The question goes in on stdin, so one starting with "-" can't be read as a flag.
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(q.question)
+  })
 }

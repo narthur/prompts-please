@@ -246,6 +246,18 @@ export function matchReverts(dir: string, git: RevertSource, now = new Date()): 
   return { incidents: raised, errors }
 }
 
+/** Asks a forked copy of a session a question; the claude service in production, a fake in tests. */
+export type Interrogator = { forkAndAsk(q: { sessionId: string; cwd: string; question: string }): Promise<string> }
+
+/** Ask a waiting visitor's session a question without touching it. Nothing is stamped or recorded. */
+export async function interrogate(dir: string, id: string, question: string, claude: Interrogator): Promise<string> {
+  if (!question.trim()) throw new Error('an interrogation needs a question')
+  const entry = readEntry(fileFor(hallDir(dir), id))
+  if (!entry) throw new NotFound(`${id} is not in the hall`)
+  const { sessionId, cwd } = entry.kind === 'incident' || entry.kind === 'finished' ? entry.papers : papersOf(entry.form)
+  return claude.forkAndAsk({ sessionId, cwd, question })
+}
+
 /** Validate untrusted data (an HTTP body, a decision file) as a Decision; null if it isn't one. */
 export function parseDecision(raw: unknown): Decision | null {
   if (typeof raw !== 'object' || raw === null) return null

@@ -3,9 +3,9 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { dailySummary, fileComplaint, listHall, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
+import { dailySummary, fileComplaint, interrogate, listHall, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
 import { matcher, port, stateDir, summaryDir } from './config.ts'
-import { resumeSession } from './services/claude/index.ts'
+import * as claude from './services/claude/index.ts'
 import { writeDailySummary } from './services/vault/index.ts'
 import * as git from './services/git/index.ts'
 
@@ -50,7 +50,13 @@ function trusted(req: IncomingMessage): boolean {
 }
 
 const sendError = (res: ServerResponse, e: unknown) =>
-  send(res, e instanceof NotFound ? 404 : 400, { error: (e as Error).message })
+  send(res, e instanceof NotFound ? 404 : e instanceof claude.Upstream ? 502 : 400, { error: (e as Error).message })
+
+// A malformed escape is left as is; the bureau's id check then rejects it with a 400 instead of throwing here.
+const decodeId = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
+
+// One interrogation per visitor at a time: each one is a full claude run.
+const asking = new Set<string>()
 
 // ponytail: runs on start and when the booth asks; schedule it if reverts should surface unprompted.
 function scanReverts(): { incidents: string[]; errors: string[] } {
@@ -85,11 +91,11 @@ createServer((req, res) => {
     readBody(req).then((raw) => {
       const decision = parseDecision(parseJson(raw))
       if (!decision) return send(res, 400, { error: 'body must be {"verdict":"admit"} | {"verdict":"refuse","reason":…} | {"verdict":"return","note":…}' })
-      const id = decodeURIComponent(stampRoute[1])
+      const id = decodeId(stampRoute[1])
       const now = new Date() // one clock reading, so the stamp lands in the note for its own day
       let resume
       try { resume = stamp(stateDir, id, decision, now) } catch (e) { return sendError(res, e) }
-      if (resume) resumeSession({ ...resume, settingsPath, stateDir })
+      if (resume) claude.resumeSession({ ...resume, settingsPath, stateDir })
       refreshSummary(now)
       send(res, 200, { stamped: id, verdict: decision.verdict })
     }, () => send(res, 413, { error: 'body too large' }))
@@ -103,9 +109,24 @@ createServer((req, res) => {
       if (typeof reason !== 'string') return send(res, 400, { error: 'body must be {"reason": string}' })
       const now = new Date()
       let incident
-      try { incident = fileComplaint(stateDir, decodeURIComponent(complaintRoute[1]), reason, now) } catch (e) { return sendError(res, e) }
+      try { incident = fileComplaint(stateDir, decodeId(complaintRoute[1]), reason, now) } catch (e) { return sendError(res, e) }
       refreshSummary(now)
       send(res, 200, { incident })
+    }, () => send(res, 413, { error: 'body too large' }))
+    return
+  }
+
+  const askRoute = url.pathname.match(/^\/api\/hall\/([^/]+)\/interrogate$/)
+  if (req.method === 'POST' && askRoute) {
+    readBody(req).then((raw) => {
+      const question = (parseJson(raw) as { question?: unknown } | null)?.question
+      if (typeof question !== 'string') return send(res, 400, { error: 'body must be {"question": string}' })
+      const id = decodeId(askRoute[1])
+      if (asking.has(id)) return send(res, 409, { error: 'already interrogating this visitor' })
+      asking.add(id)
+      interrogate(stateDir, id, question, claude)
+        .then((answer) => send(res, 200, { answer }), (e) => sendError(res, e))
+        .finally(() => asking.delete(id))
     }, () => send(res, 413, { error: 'body too large' }))
     return
   }

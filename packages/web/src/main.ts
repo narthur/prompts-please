@@ -60,6 +60,46 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = ''): HTMLEleme
   return node
 }
 
+// Questions and answers per visitor, kept across re-renders.
+const transcripts = new Map<string, string[]>()
+const pending = new Set<string>()
+
+function interrogation(id: string): HTMLElement {
+  const box = el('div')
+  box.className = 'interrogation'
+  const log = el('div')
+  const show = (line: string) => { log.append(el('p', line)); transcripts.set(id, [...(transcripts.get(id) ?? []), line]) }
+  for (const line of transcripts.get(id) ?? []) log.append(el('p', line))
+  const q = el('input')
+  q.placeholder = 'Ask a question (a fresh copy of the agent answers each one; the agent itself is untouched)'
+  const ask = el('button', 'Interrogate')
+  if (pending.has(id)) { ask.disabled = true; ask.textContent = 'Waiting for an answer…' }
+  ask.onclick = async () => {
+    const question = q.value.trim()
+    if (!question) return q.focus()
+    pending.add(id)
+    ask.disabled = true
+    ask.textContent = 'Waiting for an answer…'
+    show(`Q: ${question}`)
+    q.value = ''
+    try {
+      const res = await fetch(`/api/hall/${encodeURIComponent(id)}/interrogate`, {
+        method: 'POST',
+        headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
+        body: JSON.stringify({ question }),
+      })
+      show(res.ok ? `A: ${(await res.json()).answer}` : `(no answer: ${await errorText(res)})`)
+    } catch {
+      show('(no answer: bureau unreachable)')
+    }
+    pending.delete(id)
+    papersKey = '' // rebuild, so the answer shows even if the papers were redrawn meanwhile
+    render()
+  }
+  box.append(log, q, ask)
+  return box
+}
+
 // Draft notes per visitor, so re-rendering or a failed stamp never loses what the operator typed.
 const drafts = new Map<string, string>()
 let papersKey = ''
@@ -68,6 +108,7 @@ let problem = ''
 
 function render() {
   if (!hall.some((v) => v.toolUseId === selectedId)) selectedId = hall[0]?.toolUseId ?? null
+  for (const id of transcripts.keys()) if (!hall.some((v) => v.toolUseId === id)) transcripts.delete(id)
 
   hallEl.replaceChildren(...hall.map((v) => {
     const li = el('li', `${v.kind === 'incident' ? 'INCIDENT · ' : v.kind === 'finished' ? 'DONE · ' : ''}${v.character.name} · ${v.toolName} · ${v.character.label} · ${v.waitSeconds}s`)
@@ -120,6 +161,7 @@ function render() {
     ...(v.kind === 'finished'
       ? [el('pre', String(v.toolInput.message ?? '')), el('p', `Commits: ${(v.toolInput.commits as string[] | undefined)?.join(', ') || 'none'}`)]
       : [el('pre', JSON.stringify(v.toolInput, null, 2))]),
+    interrogation(v.toolUseId),
     note,
     stamps,
   )
