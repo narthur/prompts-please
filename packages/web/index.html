@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prompts Please</title>
+  <style>
+    body { margin: 0; background: #1b1a17; color: #e8e2d0; font: 15px/1.4 ui-monospace, Menlo, monospace; }
+    main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; padding: 16px; }
+    #scene canvas { width: 100%; height: auto; image-rendering: pixelated; }
+    #hall { list-style: none; padding: 0; margin: 0; }
+    #hall li { padding: 6px 8px; border: 1px solid #4a4436; margin-bottom: 6px; cursor: pointer; }
+    #hall li.selected { border-color: #d9b45a; }
+    #papers pre { white-space: pre-wrap; word-break: break-word; background: #f1e9d2; color: #2a2620; padding: 10px; max-height: 50vh; overflow: auto; }
+    button { font: inherit; padding: 6px 14px; background: #3c7a3c; color: #fff; border: 0; cursor: pointer; }
+    @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <div id="scene"></div>
+      <div id="papers"></div>
+    </section>
+    <aside>
+      <h2>Hall</h2>
+      <ul id="hall"></ul>
+    </aside>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

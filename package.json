@@ -1,0 +1,14 @@
+{
+  "name": "prompts-please",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --parallel -r dev",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "~5.9"
+  }
+}

@@ -1,0 +1,8 @@
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+/** Shared by the hook and the server; the hook gets it through the env var baked into the agent settings. */
+export const stateDir = process.env.PROMPTS_PLEASE_STATE ?? join(homedir(), '.local', 'state', 'prompts-please')
+export const port = Number(process.env.PROMPTS_PLEASE_PORT ?? 4317)
+// ponytail: fixed matcher; make it configurable when an agent needs a different set of tools parked.
+export const matcher = 'Bash|Write|Edit|NotebookEdit'
