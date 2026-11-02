@@ -12,10 +12,15 @@ const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`
 
 // Settings an agent is launched with (`claude -p --settings <this file>`); resumes reuse them.
 const settingsPath = join(stateDir, 'agent-settings.json')
-const hookPath = fileURLToPath(new URL('./hook.ts', import.meta.url))
+const hookCommand = (file: string) =>
+  `PROMPTS_PLEASE_STATE=${shellQuote(stateDir)} node ${shellQuote(fileURLToPath(new URL(file, import.meta.url)))}`
 mkdirSync(stateDir, { recursive: true })
 writeFileSync(settingsPath, JSON.stringify({
-  hooks: { PreToolUse: [{ matcher, hooks: [{ type: 'command', command: `PROMPTS_PLEASE_STATE=${shellQuote(stateDir)} node ${shellQuote(hookPath)}` }] }] },
+  hooks: {
+    PreToolUse: [{ matcher, hooks: [{ type: 'command', command: hookCommand('./hook.ts') }] }],
+    SessionStart: [{ hooks: [{ type: 'command', command: hookCommand('./session-hook.ts') }] }],
+    Stop: [{ hooks: [{ type: 'command', command: hookCommand('./session-hook.ts') }] }],
+  },
 }, null, 2))
 
 // Rejects once the body passes the limit, but keeps draining it so the 413 can still be sent.
@@ -71,9 +76,9 @@ createServer((req, res) => {
       if (!decision) return send(res, 400, { error: 'body must be {"verdict":"admit"} | {"verdict":"refuse","reason":…} | {"verdict":"return","note":…}' })
       const id = decodeURIComponent(stampRoute[1])
       const now = new Date() // one clock reading, so the stamp lands in the note for its own day
-      let form
-      try { form = stamp(stateDir, id, decision, now) } catch (e) { return sendError(res, e) }
-      if (form) resumeSession({ sessionId: form.session_id, cwd: form.cwd, settingsPath, stateDir })
+      let resume
+      try { resume = stamp(stateDir, id, decision, now) } catch (e) { return sendError(res, e) }
+      if (resume) resumeSession({ ...resume, settingsPath, stateDir })
       refreshSummary(now)
       send(res, 200, { stamped: id, verdict: decision.verdict })
     }, () => send(res, 413, { error: 'body too large' }))

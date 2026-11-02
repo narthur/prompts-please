@@ -11,7 +11,7 @@ type Visitor = {
   waitSeconds: number
   character: { label: string; name: string; portrait: number }
   trust: { admitted: number; complaints: number; level: 'unknown' | 'known' | 'trusted' | 'suspect' }
-} & ({ kind: 'permission' } | { kind: 'incident'; against: string; complaint: string })
+} & ({ kind: 'permission' } | { kind: 'incident'; against: string; complaint: string } | { kind: 'finished' })
 
 type Verdict = 'admit' | 'refuse' | 'return'
 // Shape of core's GET /api/ledger entries (only the fields the booth shows).
@@ -70,7 +70,7 @@ function render() {
   if (!hall.some((v) => v.toolUseId === selectedId)) selectedId = hall[0]?.toolUseId ?? null
 
   hallEl.replaceChildren(...hall.map((v) => {
-    const li = el('li', `${v.kind === 'incident' ? 'INCIDENT · ' : ''}${v.character.name} · ${v.toolName} · ${v.character.label} · ${v.waitSeconds}s`)
+    const li = el('li', `${v.kind === 'incident' ? 'INCIDENT · ' : v.kind === 'finished' ? 'DONE · ' : ''}${v.character.name} · ${v.toolName} · ${v.character.label} · ${v.waitSeconds}s`)
     li.classList.toggle('selected', v.toolUseId === selectedId)
     li.onclick = () => { selectedId = v.toolUseId; render() }
     return li
@@ -112,10 +112,14 @@ function render() {
     el('p', `${v.character.name} (${v.character.label}): ${t.level}, ${t.admitted} admitted, ${t.complaints} complaint${t.complaints === 1 ? '' : 's'}`),
     ...(v.kind === 'incident'
       ? [el('h3', 'Incident report'), el('p', `Complaint about stamp ${v.against}: ${v.complaint}`), el('p', 'Admit upholds the complaint; Refuse dismisses it.')]
+      : v.kind === 'finished'
+      ? [el('h3', 'Finished work'), el('p', 'Return sends the note to the agent as its next instruction. Refuse closes it; the reason stays in the ledger.')]
       : [el('h3', `${v.toolName} request`)]),
     el('p', `Project: ${v.cwd}`),
     el('p', `Session: ${v.sessionId}`),
-    el('pre', JSON.stringify(v.toolInput, null, 2)),
+    ...(v.kind === 'finished'
+      ? [el('pre', String(v.toolInput.message ?? '')), el('p', `Commits: ${(v.toolInput.commits as string[] | undefined)?.join(', ') || 'none'}`)]
+      : [el('pre', JSON.stringify(v.toolInput, null, 2))]),
     note,
     stamps,
   )

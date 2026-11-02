@@ -15,6 +15,12 @@ export type PermissionForm = {
   job?: string
 }
 
+/** A finished headless run, filed by the Stop hook. */
+export type FinishedForm = { session_id: string; cwd: string; message: string; commits: string[]; job?: string }
+
+/** What the caller should resume after a stamp: the session, with a prompt when finished work is returned. */
+export type Resume = { sessionId: string; cwd: string; prompt?: string; job?: string }
+
 /** A recurring robot: one per project directory plus job label. */
 export type Character = { id: string; label: string; name: string; portrait: number }
 export type Trust = { admitted: number; complaints: number; level: 'unknown' | 'known' | 'trusted' | 'suspect' }
@@ -23,6 +29,8 @@ export type Visitor = Papers & { toolUseId: string; arrivedAt: string; waitSecon
   | { kind: 'permission' }
   /** A complaint about an earlier admission (`against`). */
   | { kind: 'incident'; against: string; complaint: string }
+  /** A finished run; toolInput holds { message, commits }. */
+  | { kind: 'finished' }
 )
 
 /** Thrown when the visitor or stamp asked for doesn't exist (HTTP 404). */
@@ -34,6 +42,7 @@ type Papers = { sessionId: string; cwd: string; toolName: string; toolInput: Rec
 type HallEntry =
   | { kind?: 'permission'; form: PermissionForm; arrivedAt: string }
   | { kind: 'incident'; id: string; against: string; complaint: string; papers: Papers; arrivedAt: string }
+  | { kind: 'finished'; id: string; papers: Papers; arrivedAt: string }
 
 const papersOf = (f: PermissionForm): Papers =>
   ({ sessionId: f.session_id, cwd: f.cwd, toolName: f.tool_name, toolInput: f.tool_input, ...(f.job ? { job: f.job } : {}) })
@@ -125,16 +134,19 @@ export function listHall(dir: string, now = new Date()): Visitor[] {
       const waitSeconds = Math.floor((now.getTime() - Date.parse(e.arrivedAt)) / 1000)
       return e.kind === 'incident'
         ? { kind: 'incident', toolUseId: e.id, against: e.against, complaint: e.complaint, ...e.papers, ...who(e.papers), arrivedAt: e.arrivedAt, waitSeconds }
+        : e.kind === 'finished'
+        ? { kind: 'finished', toolUseId: e.id, ...e.papers, ...who(e.papers), arrivedAt: e.arrivedAt, waitSeconds }
         : { kind: 'permission', toolUseId: e.form.tool_use_id, ...papersOf(e.form), ...who(papersOf(e.form)), arrivedAt: e.arrivedAt, waitSeconds }
     })
     .sort((a, b) => a.arrivedAt.localeCompare(b.arrivedAt))
 }
 
 /**
- * Stamp a waiting visitor. Returns the tool call's form so the caller can resume its session,
- * or null for an incident (Admit upholds the complaint, Refuse dismisses it; no session resumes).
+ * Stamp a waiting visitor and say which session to resume, if any: a tool call's session always
+ * (the hook then reads the decision); finished work only when returned, with the note as the prompt.
+ * Incidents resume nothing (Admit upholds the complaint, Refuse dismisses it).
  */
-export function stamp(dir: string, toolUseId: string, decision: Decision, now = new Date()): PermissionForm | null {
+export function stamp(dir: string, toolUseId: string, decision: Decision, now = new Date()): Resume | null {
   const hallFile = fileFor(hallDir(dir), toolUseId)
   // The agent acts on this text, so a refusal or return must say something.
   if (decision.verdict === 'refuse' && !decision.reason.trim()) throw new Error('a refusal needs a reason')
@@ -145,8 +157,10 @@ export function stamp(dir: string, toolUseId: string, decision: Decision, now = 
   const at = now.toISOString()
   const record: LedgerEntry = entry.kind === 'incident'
     ? { type: 'stamp', at, toolUseId, against: entry.against, ...entry.papers, decision }
+    : entry.kind === 'finished'
+    ? { type: 'stamp', at, toolUseId, ...entry.papers, decision }
     : { type: 'stamp', at, toolUseId, ...papersOf(entry.form), decision }
-  if (entry.kind !== 'incident') {
+  if (entry.kind !== 'incident' && entry.kind !== 'finished') {
     mkdirSync(decisionsDir(dir), { recursive: true })
     writeAtomic(fileFor(decisionsDir(dir), toolUseId), decision)
   }
@@ -154,7 +168,29 @@ export function stamp(dir: string, toolUseId: string, decision: Decision, now = 
   // Only the server writes the ledger, so appends never race.
   rmSync(hallFile)
   appendLedger(dir, record)
-  return entry.kind === 'incident' ? null : entry.form
+  const resume: Resume = { sessionId: record.sessionId, cwd: record.cwd, ...(record.job ? { job: record.job } : {}) }
+  if (entry.kind === 'incident') return null
+  if (entry.kind === 'finished') return decision.verdict === 'return' ? { ...resume, prompt: decision.note } : null
+  return resume
+}
+
+/**
+ * File a finished run for review. Returns its id, or null when the run actually stopped on a
+ * tool call still parked in the hall (that visitor already stands for the session).
+ */
+export function fileFinished(dir: string, form: FinishedForm, now = new Date()): string | null {
+  const id = `fin_${form.session_id}_${now.getTime()}`
+  const file = fileFor(hallDir(dir), id) // validates the session id too
+  let parked: string[] = []
+  try { parked = readdirSync(hallDir(dir)) } catch {}
+  if (parked.some((f) => { const e = readEntry(join(hallDir(dir), f)); return e && e.kind !== 'incident' && e.kind !== 'finished' && e.form.session_id === form.session_id })) return null
+  const papers: Papers = {
+    sessionId: form.session_id, cwd: form.cwd, toolName: 'Finished work',
+    toolInput: { message: form.message, commits: form.commits }, ...(form.job ? { job: form.job } : {}),
+  }
+  mkdirSync(hallDir(dir), { recursive: true })
+  writeAtomic(file, { kind: 'finished', id, papers, arrivedAt: now.toISOString() } satisfies HallEntry)
+  return id
 }
 
 const appendLedger = (dir: string, record: LedgerEntry) => appendFileSync(ledgerFile(dir), JSON.stringify(record) + '\n')
