@@ -151,8 +151,8 @@ export function listHall(dir: string, now = new Date()): Visitor[] {
 }
 
 /**
- * Stamp a waiting visitor and say which session to resume, if any: a tool call's session always
- * (the hook then reads the decision); finished work only when returned, with the note as the prompt.
+ * Stamp a waiting visitor and say which session to resume, if any: a tool call's session unless the
+ * visitor is stale (the hook then reads the decision); finished work only when returned, with the note as the prompt.
  * Incidents resume nothing (Admit upholds the complaint, Refuse dismisses it).
  */
 export function stamp(dir: string, toolUseId: string, decision: Decision, now = new Date()): Resume | null {

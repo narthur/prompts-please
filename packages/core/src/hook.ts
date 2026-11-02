@@ -4,14 +4,18 @@ import { readFileSync } from 'node:fs'
 import { decisionFor, submit, type Decision, type PermissionForm } from './bureau.ts'
 import { stateDir } from './config.ts'
 
-const input = JSON.parse(readFileSync(0, 'utf8'))
-for (const key of ['session_id', 'cwd', 'tool_name', 'tool_use_id'] as const) {
-  if (typeof input?.[key] !== 'string') {
-    // Exit 2 blocks the call; a malformed payload must not slip through unstamped.
-    console.error(`prompts-please hook: payload missing ${key}`)
-    process.exit(2)
-  }
+// Exit 2 blocks the call; a malformed payload must not slip through unstamped (exit 1 would let it run).
+function reject(why: string): never {
+  console.error(`prompts-please hook: ${why}`)
+  process.exit(2)
 }
+let input
+try { input = JSON.parse(readFileSync(0, 'utf8')) } catch { reject('payload is not JSON') }
+for (const key of ['session_id', 'cwd', 'tool_name', 'tool_use_id'] as const) {
+  if (typeof input?.[key] !== 'string') reject(`payload missing ${key}`)
+}
+if (!input.tool_input || typeof input.tool_input !== 'object') reject('payload missing tool_input')
+if (!/^[A-Za-z0-9_-]+$/.test(input.session_id)) reject('bad session_id')
 // job comes only from our env var, never from the payload.
 const { job: _ignored, ...payload } = input
 const job = process.env.PROMPTS_PLEASE_JOB?.trim()

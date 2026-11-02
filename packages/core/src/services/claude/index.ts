@@ -1,6 +1,6 @@
 // The claude CLI, behind domain-shaped functions.
 import { execFile, spawn } from 'node:child_process'
-import { mkdirSync, openSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
 import { matcher } from '../../config.ts'
 
@@ -29,6 +29,7 @@ export function resumeSession(opts: { sessionId: string; cwd: string; prompt?: s
       detached: true,
     },
   )
+  closeSync(log) // the child has its own copy
   child.stdin?.on('error', (e) => console.error(`prompt for ${opts.sessionId} not delivered: ${e.message}`))
   child.stdin?.end(opts.prompt)
   // Without this, a missing `claude` on PATH (ENOENT) would crash the whole bureau.

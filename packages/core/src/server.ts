@@ -24,7 +24,7 @@ writeFileSync(settingsPath, JSON.stringify({
   },
 }, null, 2))
 
-// Rejects once the body passes the limit, but keeps draining it so the 413 can still be sent.
+// Drains the whole body so the 413 can still be sent, then rejects if it passed the limit.
 function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = ''
@@ -67,14 +67,19 @@ function resumeOnce(r: Resume) {
   }
   running.add(r.sessionId)
   let done = false // 'error' and 'exit' can both fire
-  claude.resumeSession({ ...r, settingsPath, stateDir, onExit: () => {
+  const onExit = () => {
     if (done) return
     done = true
     running.delete(r.sessionId)
     const next = queued.get(r.sessionId)?.shift()
     if (!queued.get(r.sessionId)?.length) queued.delete(r.sessionId)
     if (next) resumeOnce(next)
-  } })
+  }
+  // A synchronous throw (e.g. the log can't be opened) must not leave the session locked.
+  try { claude.resumeSession({ ...r, settingsPath, stateDir, onExit }) } catch (e) {
+    console.error(`resume of ${r.sessionId} failed to start: ${(e as Error).message}`)
+    onExit()
+  }
 }
 
 // A malformed escape is left as is; the bureau's id check then rejects it with a 400 instead of throwing here.
@@ -108,7 +113,7 @@ createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/other-window') return send(res, 200, listOtherWindow(sessionsDir))
   if (req.method === 'GET' && url.pathname === '/api/ledger') {
     // The booth shows recent entries only; leave out toolInput (can be whole files).
-    const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 500)
+    const limit = Math.min(Math.max(Math.trunc(Number(url.searchParams.get('limit'))) || 50, 1), 500)
     return send(res, 200, readLedger(stateDir).slice(-limit).map(({ toolInput, ...rest }) => rest))
   }
 
