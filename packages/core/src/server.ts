@@ -3,8 +3,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { dailySummary, fileComplaint, interrogate, listHall, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
-import { matcher, port, stateDir, summaryDir } from './config.ts'
+import { dailySummary, fileComplaint, interrogate, listHall, listOtherWindow, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
+import { matcher, port, sessionsDir, stateDir, summaryDir } from './config.ts'
 import * as claude from './services/claude/index.ts'
 import { writeDailySummary } from './services/vault/index.ts'
 import * as git from './services/git/index.ts'
@@ -80,6 +80,7 @@ createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost')
 
   if (req.method === 'GET' && url.pathname === '/api/hall') return send(res, 200, listHall(stateDir))
+  if (req.method === 'GET' && url.pathname === '/api/other-window') return send(res, 200, listOtherWindow(sessionsDir))
   if (req.method === 'GET' && url.pathname === '/api/ledger') {
     // The booth shows recent entries only; leave out toolInput (can be whole files).
     const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 500)

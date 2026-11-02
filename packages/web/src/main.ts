@@ -20,6 +20,9 @@ type LedgerEntry = { at: string; toolUseId: string; toolName: string; cwd: strin
   | { type: 'complaint'; against: string; reason: string }
 )
 
+// Shape of core's GET /api/other-window.
+type InteractiveSession = { sessionId: string; cwd: string; name: string; status: string; updatedAt: string; character: { name: string; label: string } }
+
 let hall: Visitor[] = []
 let selectedId: string | null = null
 
@@ -53,6 +56,7 @@ new Phaser.Game({
 const hallEl = document.querySelector<HTMLUListElement>('#hall')!
 const papersEl = document.querySelector<HTMLDivElement>('#papers')!
 const ledgerEl = document.querySelector<HTMLOListElement>('#ledger')!
+const otherEl = document.querySelector<HTMLUListElement>('#other')!
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = ''): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag)
@@ -195,8 +199,14 @@ function renderLedger(entries: LedgerEntry[]) {
   }))
 }
 
+// Read-only on purpose: no click handler, no stamp controls.
+function renderOther(sessions: InteractiveSession[]) {
+  otherEl.replaceChildren(...sessions.map((s) => el('li', `${s.character.name} · ${s.character.label} · ${s.name} · ${s.status}`)))
+  if (!sessions.length) otherEl.append(el('li', 'No interactive sessions running.'))
+}
+
 async function refresh() {
-  const [hallRes, ledgerRes] = await Promise.allSettled([fetch('/api/hall'), fetch('/api/ledger?limit=50')])
+  const [hallRes, ledgerRes, otherRes] = await Promise.allSettled([fetch('/api/hall'), fetch('/api/ledger?limit=50'), fetch('/api/other-window')])
   try {
     if (hallRes.status === 'rejected') problem = 'Bureau unreachable'
     else if (hallRes.value.ok) { hall = await hallRes.value.json(); problem = '' }
@@ -207,6 +217,12 @@ async function refresh() {
   render()
   // The ledger is secondary: if it fails, keep showing the last good one.
   try { if (ledgerRes.status === 'fulfilled' && ledgerRes.value.ok) renderLedger(await ledgerRes.value.json()) } catch {}
+  try {
+    if (otherRes.status === 'fulfilled' && otherRes.value.ok) renderOther(await otherRes.value.json())
+    else otherEl.replaceChildren(el('li', 'Could not read the other window.'))
+  } catch {
+    otherEl.replaceChildren(el('li', 'Could not read the other window.'))
+  }
 }
 
 async function stamp(toolUseId: string, verdict: Verdict, text: string) {

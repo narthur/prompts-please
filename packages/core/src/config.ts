@@ -8,3 +8,5 @@ export const port = Number(process.env.PROMPTS_PLEASE_PORT ?? 4317)
 export const matcher = 'Bash|Write|Edit|NotebookEdit'
 /** Folder for daily ledger notes (e.g. inside an Obsidian vault). Unset: no notes are written. */
 export const summaryDir = process.env.PROMPTS_PLEASE_SUMMARY_DIR
+/** Claude Code's registry of running sessions, for the other window. */
+export const sessionsDir = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'sessions')

@@ -258,6 +258,35 @@ export async function interrogate(dir: string, id: string, question: string, cla
   return claude.forkAndAsk({ sessionId, cwd, question })
 }
 
+/** An interactive Claude Code session, shown read-only: Remote Control handles its approvals. */
+export type InteractiveSession = { sessionId: string; cwd: string; name: string; status: string; updatedAt: string; character: Character }
+
+const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' } }
+
+/**
+ * The other window: interactive sessions that are running now, read from Claude Code's session registry.
+ * Only the <pid>.json files are read; nothing there is written or opened.
+ */
+// ponytail: ~/.claude/sessions is Claude Code's internal, undocumented format; if it changes, this goes empty.
+// Liveness is kill(pid, 0), so a crashed session whose pid got reused shows as running until the file goes.
+export function listOtherWindow(sessionsDir: string, isAlive: (pid: number) => boolean = alive): InteractiveSession[] {
+  let files: string[]
+  try { files = readdirSync(sessionsDir).filter((f) => /^\d+\.json$/.test(f)) } catch { return [] }
+  return files.flatMap((f) => {
+    let s: Record<string, unknown>
+    try { s = JSON.parse(readFileSync(join(sessionsDir, f), 'utf8')) } catch { return [] }
+    if (s?.kind !== 'interactive' || typeof s.sessionId !== 'string' || typeof s.cwd !== 'string') return []
+    // pid 0 or negative would signal a process group and always look alive.
+    if (s.pid !== Number(f.slice(0, -5)) || !Number.isInteger(s.pid) || (s.pid as number) <= 0 || !isAlive(s.pid as number)) return []
+    const at = typeof s.updatedAt === 'number' ? new Date(s.updatedAt) : null
+    const updated = at && !isNaN(at.getTime()) ? at.toISOString() : ''
+    return [{
+      sessionId: s.sessionId, cwd: s.cwd, name: typeof s.name === 'string' ? s.name : s.sessionId,
+      status: typeof s.status === 'string' ? s.status : 'unknown', updatedAt: updated, character: characterOf({ cwd: s.cwd }),
+    }]
+  }).sort((a, b) => a.name.localeCompare(b.name))
+}
+
 /** Validate untrusted data (an HTTP body, a decision file) as a Decision; null if it isn't one. */
 export function parseDecision(raw: unknown): Decision | null {
   if (typeof raw !== 'object' || raw === null) return null
