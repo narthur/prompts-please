@@ -129,7 +129,7 @@ class Booth extends Phaser.Scene {
         if (!reducedMotion()) this.cameras.main.shake(120, 0.01)
         const ink = this.add.image(FORM.x, FORM.y, `ink-${verdict}`).setScale(0.45).setAngle(Phaser.Math.Between(-12, 12))
         this.tweens.add({ targets: stamp, y: -60, duration: 200, delay: 150, onComplete: () => stamp.destroy() })
-        this.time.delayedCall(700, () => {
+        this.time.delayedCall(reducedMotion() ? 35 : 700, () => {
           ink.destroy()
           this.form.setVisible(false)
           this.shownId = '' // whatever is selected next walks in

@@ -134,7 +134,7 @@ function render() {
     return li
   }))
   if (problem) hallEl.prepend(el('li', problem))
-  if (focused) hallEl.querySelector<HTMLElement>(`[data-id="${CSS.escape(focused)}"]`)?.focus()
+  if (focused) hallEl.querySelector<HTMLElement>(`[data-id="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true })
 
   showBoard(selectedId) // outside the papers check below, so a failed load is retried on the next poll
   // Only rebuild the papers when the visitor changes, so polling doesn't reset scroll or selection.
