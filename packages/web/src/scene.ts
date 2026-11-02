@@ -28,6 +28,8 @@ function line(v: SceneVisitor | null): string {
   return v.stale ? `${said} ...SIGNAL LOST.` : said
 }
 
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
+
 let audio: AudioContext | null = null
 // A synthesized thud, so there are no sound files to ship. Runs after a click, so audio is allowed.
 function thud() {
@@ -84,6 +86,7 @@ class Booth extends Phaser.Scene {
   }
 
   update() {
+    this.tweens.timeScale = reducedMotion() ? 20 : 1 // near-instant moves, checked live
     this.sign.setText(`ARRIVALS WAITING: ${this.waiting()}`)
     const v = this.visitor()
     if (!this.busy && (v?.toolUseId ?? null) !== this.shownId) this.arrive(v)
@@ -123,10 +126,10 @@ class Booth extends Phaser.Scene {
       targets: stamp, y: FORM.y - 20, duration: 140, ease: 'Quad.easeIn',
       onComplete: () => {
         thud()
-        this.cameras.main.shake(120, 0.01)
+        if (!reducedMotion()) this.cameras.main.shake(120, 0.01)
         const ink = this.add.image(FORM.x, FORM.y, `ink-${verdict}`).setScale(0.45).setAngle(Phaser.Math.Between(-12, 12))
         this.tweens.add({ targets: stamp, y: -60, duration: 200, delay: 150, onComplete: () => stamp.destroy() })
-        this.time.delayedCall(700, () => {
+        this.time.delayedCall(reducedMotion() ? 35 : 700, () => {
           ink.destroy()
           this.form.setVisible(false)
           this.shownId = '' // whatever is selected next walks in

@@ -70,6 +70,7 @@ async function showBoard(id: string | null) {
 // Questions and answers per visitor, kept across re-renders.
 const transcripts = new Map<string, string[]>()
 const pending = new Set<string>()
+const questionDrafts = new Map<string, string>()
 
 function interrogation(id: string): HTMLElement {
   const box = el('div')
@@ -79,6 +80,8 @@ function interrogation(id: string): HTMLElement {
   for (const line of transcripts.get(id) ?? []) log.append(el('p', line))
   const q = el('input')
   q.placeholder = 'Ask a question (a fresh copy of the agent answers each one; the agent itself is untouched)'
+  q.value = questionDrafts.get(id) ?? ''
+  q.oninput = () => questionDrafts.set(id, q.value)
   const ask = el('button', 'Interrogate')
   if (pending.has(id)) { ask.disabled = true; ask.textContent = 'Waiting for an answer…' }
   ask.onclick = async () => {
@@ -89,6 +92,7 @@ function interrogation(id: string): HTMLElement {
     ask.textContent = 'Waiting for an answer…'
     show(`Q: ${question}`)
     q.value = ''
+    questionDrafts.delete(id)
     try {
       const res = await fetch(`/api/hall/${encodeURIComponent(id)}/interrogate`, {
         method: 'POST',
@@ -117,13 +121,20 @@ function render() {
   if (!hall.some((v) => v.toolUseId === selectedId)) selectedId = hall[0]?.toolUseId ?? null
   for (const id of transcripts.keys()) if (!hall.some((v) => v.toolUseId === id)) transcripts.delete(id)
 
+  const focused = (document.activeElement as HTMLElement | null)?.dataset.id // rebuilding drops focus; restore it below
   hallEl.replaceChildren(...hall.map((v) => {
     const li = el('li', `${v.stale ? 'STALE · ' : ''}${v.kind === 'incident' ? 'INCIDENT · ' : v.kind === 'finished' ? 'DONE · ' : ''}${v.character.name} · ${v.toolName} · ${v.character.label} · ${v.waitSeconds}s`)
     li.classList.toggle('selected', v.toolUseId === selectedId)
+    if (v.toolUseId === selectedId) li.setAttribute('aria-current', 'true')
+    li.tabIndex = 0
+    li.dataset.id = v.toolUseId
+    li.setAttribute('role', 'button')
     li.onclick = () => { selectedId = v.toolUseId; render() }
+    li.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); li.click() } }
     return li
   }))
   if (problem) hallEl.prepend(el('li', problem))
+  if (focused) hallEl.querySelector<HTMLElement>(`[data-id="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true })
 
   showBoard(selectedId) // outside the papers check below, so a failed load is retried on the next poll
   // Only rebuild the papers when the visitor changes, so polling doesn't reset scroll or selection.
@@ -211,15 +222,22 @@ function renderOther(sessions: InteractiveSession[]) {
   if (!sessions.length) otherEl.append(el('li', 'No interactive sessions running.'))
 }
 
+// Bumped on every stamp: a poll that started before one may hold a snapshot with the stamped visitor still in it.
+let stampEpoch = 0
 async function refresh() {
+  const epoch = stampEpoch
   const [hallRes, ledgerRes, otherRes] = await Promise.allSettled([fetch('/api/hall'), fetch('/api/ledger?limit=50'), fetch('/api/other-window')])
+  let next: Visitor[] | null = null, why = ''
   try {
-    if (hallRes.status === 'rejected') problem = 'Bureau unreachable'
-    else if (hallRes.value.ok) { hall = await hallRes.value.json(); problem = '' }
-    else problem = `Bureau error: ${await errorText(hallRes.value)}`
+    if (hallRes.status === 'rejected') why = 'Bureau unreachable'
+    else if (hallRes.value.ok) next = await hallRes.value.json()
+    else why = `Bureau error: ${await errorText(hallRes.value)}`
   } catch {
-    problem = 'Bureau sent an unreadable hall'
+    why = 'Bureau sent an unreadable hall'
   }
+  if (epoch !== stampEpoch) return // the post-stamp refresh brings the fresh hall
+  if (next) hall = next
+  problem = why
   render()
   // The ledger is secondary: if it fails, keep showing the last good one.
   try { if (ledgerRes.status === 'fulfilled' && ledgerRes.value.ok) renderLedger(await ledgerRes.value.json()) } catch {}
@@ -233,6 +251,7 @@ async function refresh() {
 
 async function stamp(toolUseId: string, verdict: Verdict, text: string) {
   stamping = true
+  stampEpoch++
   render()
   try {
     const res = await fetch(`/api/hall/${encodeURIComponent(toolUseId)}/stamp`, {

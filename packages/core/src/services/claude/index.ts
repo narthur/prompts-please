@@ -18,18 +18,20 @@ export function resumeSession(opts: { sessionId: string; cwd: string; prompt?: s
   const logDir = join(opts.stateDir, 'runs')
   mkdirSync(logDir, { recursive: true })
   const log = openSync(join(logDir, `${opts.sessionId}-${Date.now()}.json`), 'a')
-  const child = spawn(
-    'claude',
-    ['-p', '--resume', opts.sessionId, '--settings', opts.settingsPath, '--output-format', 'json'],
-    {
-      cwd: opts.cwd,
-      env: { ...process.env, PROMPTS_PLEASE_JOB: opts.job }, // undefined drops the server's own value
-      // The prompt goes in on stdin, so a note starting with "-" can't be read as a flag.
-      stdio: [opts.prompt === undefined ? 'ignore' : 'pipe', log, log],
-      detached: true,
-    },
-  )
-  closeSync(log) // the child has its own copy
+  let child
+  try {
+    child = spawn(
+      'claude',
+      ['-p', '--resume', opts.sessionId, '--settings', opts.settingsPath, '--output-format', 'json'],
+      {
+        cwd: opts.cwd,
+        env: { ...process.env, PROMPTS_PLEASE_JOB: opts.job }, // undefined drops the server's own value
+        // The prompt goes in on stdin, so a note starting with "-" can't be read as a flag.
+        stdio: [opts.prompt === undefined ? 'ignore' : 'pipe', log, log],
+        detached: true,
+      },
+    )
+  } finally { closeSync(log) } // the child has its own copy
   child.stdin?.on('error', (e) => console.error(`prompt for ${opts.sessionId} not delivered: ${e.message}`))
   child.stdin?.end(opts.prompt)
   // Without this, a missing `claude` on PATH (ENOENT) would crash the whole bureau.
