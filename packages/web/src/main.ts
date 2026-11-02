@@ -1,5 +1,5 @@
 // The booth: Phaser draws the scene; the hall and papers are plain HTML so text stays readable.
-import Phaser from 'phaser'
+import { startBooth, type Verdict } from './scene.ts'
 
 // Shape of core's GET /api/hall. Kept local: web talks to core only over HTTP.
 type Visitor = {
@@ -14,7 +14,6 @@ type Visitor = {
   trust: { admitted: number; complaints: number; level: 'unknown' | 'known' | 'trusted' | 'suspect' }
 } & ({ kind: 'permission' } | { kind: 'incident'; against: string; complaint: string } | { kind: 'finished' })
 
-type Verdict = 'admit' | 'refuse' | 'return'
 // Shape of core's GET /api/ledger entries (only the fields the booth shows).
 type LedgerEntry = { at: string; toolUseId: string; toolName: string; cwd: string; job?: string } & (
   | { type: 'stamp'; against?: string; decision: { verdict: Verdict; reason?: string; note?: string } }
@@ -27,32 +26,7 @@ type InteractiveSession = { sessionId: string; cwd: string; name: string; status
 let hall: Visitor[] = []
 let selectedId: string | null = null
 
-class Booth extends Phaser.Scene {
-  robot!: Phaser.GameObjects.Image
-  sign!: Phaser.GameObjects.Text
-  preload() {
-    this.load.image('booth', '/scenes/booth.png')
-    this.load.image('robot', '/characters/busts/bust-1.png')
-  }
-  create() {
-    this.add.image(0, 0, 'booth').setOrigin(0)
-    this.robot = this.add.image(156, 120, 'robot').setVisible(false)
-    this.sign = this.add.text(6, 4, '', { fontFamily: 'monospace', fontSize: '10px', color: '#ffe9a8', backgroundColor: '#000a' })
-  }
-  update() {
-    this.robot.setVisible(selectedId !== null)
-    this.sign.setText(`${hall.length} waiting`)
-  }
-}
-
-new Phaser.Game({
-  type: Phaser.AUTO,
-  parent: 'scene',
-  width: 312,
-  height: 208,
-  pixelArt: true,
-  scene: Booth,
-})
+const booth = startBooth('scene', () => hall.find((v) => v.toolUseId === selectedId) ?? null, () => hall.length)
 
 const hallEl = document.querySelector<HTMLUListElement>('#hall')!
 const papersEl = document.querySelector<HTMLDivElement>('#papers')!
@@ -265,7 +239,7 @@ async function stamp(toolUseId: string, verdict: Verdict, text: string) {
       headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
       body: JSON.stringify(verdict === 'admit' ? { verdict } : verdict === 'refuse' ? { verdict, reason: text } : { verdict, note: text }),
     })
-    if (res.ok) drafts.delete(toolUseId)
+    if (res.ok) { drafts.delete(toolUseId); booth.slam(verdict) }
     else alert(`Stamp failed: ${await errorText(res)}`)
   } catch {
     alert('Stamp failed: bureau unreachable')
