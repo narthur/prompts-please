@@ -103,3 +103,13 @@ test('if the ledger cannot be written, the visitor stays in the hall undecided',
   expect(listHall(dir).map((v) => v.toolUseId)).toEqual(['toolu_a'])
   expect(decisionFor(dir, 'toolu_a')).toBeNull()
 })
+
+test('the ledger file is one JSON record per line, with no blank lines', () => {
+  submit(dir, call('toolu_a'))
+  submit(dir, call('toolu_b'))
+  stamp(dir, 'toolu_a', { verdict: 'admit' })
+  stamp(dir, 'toolu_b', { verdict: 'admit' })
+
+  const lines = readFileSync(join(dir, 'ledger.jsonl'), 'utf8').split('\n')
+  expect(lines.map((l) => (l ? JSON.parse(l).toolUseId : l))).toEqual(['toolu_a', 'toolu_b', ''])
+})

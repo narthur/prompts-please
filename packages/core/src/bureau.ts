@@ -173,13 +173,16 @@ export function stamp(dir: string, toolUseId: string, decision: Decision, now = 
     mkdirSync(decisionsDir(dir), { recursive: true })
     writeAtomic(fileFor(decisionsDir(dir), toolUseId), decision)
   }
-  // Leave the hall before recording, so a failure can't lead to the same stamp being recorded twice.
+  // Leave the hall before recording, so a failed removal can't lead to the same stamp being recorded twice.
   // Only the server writes the ledger, so appends never race.
   rmSync(hallFile)
   try { appendLedger(dir, record) } catch (e) {
-    // Unrecorded means undecided: put the visitor back so the agent isn't parked for good.
-    writeAtomic(hallFile, entry)
-    rmSync(fileFor(decisionsDir(dir), toolUseId), { force: true })
+    // Unrecorded means undecided: withdraw the decision first, then put the visitor back,
+    // so the agent isn't parked for good. Best effort: the append's error is the one reported.
+    try {
+      rmSync(fileFor(decisionsDir(dir), toolUseId), { force: true })
+      writeAtomic(hallFile, entry)
+    } catch {}
     throw e
   }
   const resume: Resume = { sessionId: record.sessionId, cwd: record.cwd, ...(record.job ? { job: record.job } : {}) }
