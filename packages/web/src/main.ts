@@ -266,6 +266,8 @@ async function stamp(toolUseId: string, verdict: Verdict, text: string) {
   }
   stamping = false
   await refresh()
+  // The rebuild removed the focused stamp button; keep a keyboard user's place on the next visitor.
+  if (document.activeElement === document.body) hallEl.querySelector<HTMLElement>('[aria-current]')?.focus()
 }
 
 async function complain(toolUseId: string) {
