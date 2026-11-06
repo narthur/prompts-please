@@ -250,6 +250,9 @@ async function refresh() {
 }
 
 async function stamp(toolUseId: string, verdict: Verdict, text: string) {
+  // A mouse click doesn't match :focus-visible, so this is set only when the stamp came from the keyboard.
+  const pressed = document.activeElement?.matches('button:focus-visible') ? (document.activeElement as HTMLElement).dataset.verdict : undefined
+  let ok = false
   stamping = true
   stampEpoch++
   render()
@@ -259,13 +262,19 @@ async function stamp(toolUseId: string, verdict: Verdict, text: string) {
       headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
       body: JSON.stringify(verdict === 'admit' ? { verdict } : verdict === 'refuse' ? { verdict, reason: text } : { verdict, note: text }),
     })
-    if (res.ok) { drafts.delete(toolUseId); booth.slam(verdict) }
+    if (res.ok) { ok = true; drafts.delete(toolUseId); booth.slam(verdict) }
     else alert(`Stamp failed: ${await errorText(res)}`)
   } catch {
     alert('Stamp failed: bureau unreachable')
   }
   stamping = false
   await refresh()
+  // The rebuild removed the pressed button. If the visitor has left the hall, put a keyboard user on the newly selected one.
+  // If it's still here after a failure, go back to the pressed button to retry. A success with the visitor still shown is a
+  // stale hall: leave focus alone, since that entry is about to vanish. Never a stamp button on a different visitor.
+  if (!pressed || document.activeElement !== document.body) return
+  const target = selectedId !== toolUseId ? hallEl.querySelector<HTMLElement>('[aria-current]') : ok ? null : papersEl.querySelector<HTMLElement>(`button[data-verdict="${pressed}"]`)
+  target?.focus({ preventScroll: true })
 }
 
 async function complain(toolUseId: string) {
