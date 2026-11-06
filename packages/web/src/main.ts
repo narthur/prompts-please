@@ -250,6 +250,9 @@ async function refresh() {
 }
 
 async function stamp(toolUseId: string, verdict: Verdict, text: string) {
+  // Only a keyboard press leaves the button :focus-visible (Firefox and Safari don't even focus a clicked one).
+  const pressed = document.activeElement?.matches('button:focus-visible') ? document.activeElement.textContent : null
+  let ok = false
   stamping = true
   stampEpoch++
   render()
@@ -259,15 +262,18 @@ async function stamp(toolUseId: string, verdict: Verdict, text: string) {
       headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
       body: JSON.stringify(verdict === 'admit' ? { verdict } : verdict === 'refuse' ? { verdict, reason: text } : { verdict, note: text }),
     })
-    if (res.ok) { drafts.delete(toolUseId); booth.slam(verdict) }
+    if (res.ok) { ok = true; drafts.delete(toolUseId); booth.slam(verdict) }
     else alert(`Stamp failed: ${await errorText(res)}`)
   } catch {
     alert('Stamp failed: bureau unreachable')
   }
   stamping = false
   await refresh()
-  // The rebuild removed the focused stamp button; keep a keyboard user's place on the next visitor.
-  if (document.activeElement === document.body) hallEl.querySelector<HTMLElement>('[aria-current]')?.focus()
+  // The rebuild removed the pressed button. Put a keyboard user on the next visitor, or back on the button to retry.
+  // The :not skips a hall that still shows the stamped visitor (a failed or stale poll), where focus would soon drop again.
+  if (pressed === null || document.activeElement !== document.body) return
+  const target = ok ? hallEl.querySelector<HTMLElement>(`[aria-current]:not([data-id="${CSS.escape(toolUseId)}"])`) : Array.from(papersEl.querySelectorAll('button')).find((b) => b.textContent === pressed)
+  target?.focus({ preventScroll: true })
 }
 
 async function complain(toolUseId: string) {
