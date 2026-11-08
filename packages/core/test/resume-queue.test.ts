@@ -157,3 +157,10 @@ test('a resume that fails to start still gets the summary refreshed and the sess
   stampAndResume('t2', admit, now)
   expect(started).toHaveLength(1)
 })
+
+test('the stamper passes the id, decision and clock through to the stamp step', () => {
+  const stamp = vi.fn(() => null)
+  createStamper({ stamp, run: fakeRun, refreshSummary: () => {} })('t1', admit, now)
+
+  expect(stamp).toHaveBeenCalledWith('t1', admit, now)
+})

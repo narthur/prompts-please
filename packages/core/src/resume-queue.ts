@@ -2,7 +2,7 @@
 // parameter so it can be exercised with a fake; server.ts only wires the real one in.
 import type { Decision, Resume } from './bureau.ts'
 
-// Starts one resume and must call onExit exactly once-ish when it ends ('error' and 'exit' may both fire).
+// Starts one resume and must call onExit at least once when it ends; repeat calls are ignored ('error' and 'exit' may both fire).
 export type RunResume = (resume: Resume, onExit: () => void) => void
 
 // One resume per session at a time: two at once would interleave turns in one transcript.
