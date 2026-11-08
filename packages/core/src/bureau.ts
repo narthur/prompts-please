@@ -97,9 +97,11 @@ export type LedgerEntry = Papers & (
   | { type: 'complaint'; at: string; toolUseId: string; against: string; reason: string }
 )
 
-// Ids become file names, so only allow the characters Claude Code uses (toolu_...).
+/** Ids become file names, so only allow the characters Claude Code uses (toolu_..., session uuids). The one safe-ID check for the bureau and both hooks. */
+export const isSafeId = (id: string): boolean => /^[A-Za-z0-9_-]+$/.test(id)
+
 function fileFor(folder: string, toolUseId: string): string {
-  if (!/^[A-Za-z0-9_-]+$/.test(toolUseId)) throw new Error(`invalid tool use id: ${JSON.stringify(toolUseId)}`)
+  if (!isSafeId(toolUseId)) throw new Error(`invalid tool use id: ${JSON.stringify(toolUseId)}`)
   return join(folder, `${toolUseId}.json`)
 }
 
