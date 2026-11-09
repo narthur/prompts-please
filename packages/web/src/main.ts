@@ -47,17 +47,33 @@ type InteractiveSession = { sessionId: string; cwd: string; name: string; status
 let hall: Visitor[] = []
 let selectedId: string | null = null
 
-// Desk objects open sheets over the scene, one at a time; the stamps under the scene stay usable.
+// Desk objects open sheets over the scene; the stamps below stay usable.
 type Sheet = 'papers' | 'board' | 'ledger-sheet' | 'other-sheet'
-let openSheet: Sheet | null = null
-function toggleSheet(name: Sheet | null) {
-  openSheet = name === openSheet ? null : name
-  document.querySelectorAll<HTMLElement>('.sheet').forEach((s) => s.toggleAttribute('open', s.id === openSheet))
-  document.querySelectorAll<HTMLElement>('#objects button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.sheet === openSheet)))
+// Any number can be open; the one last touched sits on top and Esc closes it.
+let topZ = 10
+const raise = (sheet: HTMLElement) => { sheet.style.zIndex = String(++topZ) }
+function toggleSheet(name: Sheet, open?: boolean) {
+  const sheet = document.getElementById(name)!
+  const on = open ?? !sheet.hasAttribute('open')
+  sheet.toggleAttribute('open', on)
+  if (on) raise(sheet)
+  document.querySelector(`#objects button[data-sheet="${name}"]`)?.setAttribute('aria-pressed', String(on))
 }
 document.querySelectorAll<HTMLElement>('#objects button').forEach((b) => { b.onclick = () => toggleSheet(b.dataset.sheet as Sheet) })
-document.querySelectorAll<HTMLElement>('.sheet [data-close]').forEach((b) => { b.onclick = () => toggleSheet(null) })
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openSheet) toggleSheet(null) })
+document.querySelectorAll<HTMLElement>('.sheet').forEach((s) => {
+  s.addEventListener('pointerdown', (e) => {
+    raise(s)
+    // Grabbing the resize corner lifts the default height cap, so a sheet can be made as tall as the page.
+    const r = s.getBoundingClientRect()
+    if (e.target === s && e.clientX > r.right - 20 && e.clientY > r.bottom - 20) s.style.maxHeight = 'calc(100% - 24px)'
+  })
+  s.querySelector<HTMLElement>('[data-close]')!.onclick = () => toggleSheet(s.id as Sheet, false)
+})
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return
+  const top = Array.from(document.querySelectorAll<HTMLElement>('.sheet[open]')).sort((a, b) => Number(b.style.zIndex) - Number(a.style.zIndex))[0]
+  if (top) toggleSheet(top.id as Sheet, false)
+})
 // Drag a sheet by its title bar; it stays where it was left. Clamped so the bar can't leave the screen.
 document.querySelectorAll<HTMLElement>('.sheet header').forEach((bar) => {
   const sheet = bar.parentElement!

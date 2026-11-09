@@ -17,6 +17,7 @@ small "$O/A_second_customs_window_seen_from_the_side_at_a_distance_its(2).jpg" "
 small "$O/A_cork_noticeboard_with_a_brass_frame_five_blank_pinned_memo(2).jpg" "$D/props/directive-board.png"
 small "$O/An_open_cloth-bound_ledger_book_top-down_ruled_columns_blank(3).jpg" "$D/props/ledger.png"
 small "$O/Title_logo_emblem_for_a_game_a_stamped_seal_shape_with_a_rob(1).jpg" "$D/props/logo.png"
+magick "$D/props/logo.png" -crop 120x120+96+20 +repage "$D/favicon.png" # the robot medallion
 
 # Forms: three papers on a dark background -> one file each (left/middle/right thirds, then trim the background).
 F="$O/Top-down_flat_lay_of_three_blank_bureaucratic_paper_forms_si(3).jpg"
@@ -50,7 +51,12 @@ done
 
 # Busts: 4x2 grid on white.
 B="$O/pixel_art_robot_characters_for_a_game_like_papers_please.jpg"
-magick "$B" -alpha set -fuzz 8% -fill none -draw "color 2,2 floodfill" -draw "color 2,416 floodfill" -draw "color 2,829 floodfill" "$TMPDIR/busts-cut.png"
+# Background = every white region of 150+ px, including pockets a cable or arm fences off from the edge
+# (a corner floodfill misses those). Regions 9,18,85,142,143 are white paint on heads and a chest, so they stay.
+magick "$B" \( +clone -fuzz 8% -fill black +opaque white -fill white -opaque white \
+  -define connected-components:area-threshold=150 -define connected-components:remove=0,9,18,85,142,143 \
+  -define connected-components:mean-color=true -connected-components 8 -negate \) \
+  -alpha off -compose CopyOpacity -composite "$TMPDIR/busts-cut.png"
 n=1; for r in 0 1; do for c in 0 1 2 3; do
   magick "$TMPDIR/busts-cut.png" -crop 312x416+$((c*312))+$((r*416)) +repage -trim +repage -filter box -resize 25% "$D/characters/busts/bust-$n.png"; n=$((n+1))
 done; done
