@@ -1,5 +1,26 @@
 // The booth: Phaser draws the scene; the hall and papers are plain HTML so text stays readable.
 import { startBooth, type Verdict } from './scene.ts'
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
+import css from 'highlight.js/lib/languages/css'
+import diff from 'highlight.js/lib/languages/diff'
+import go from 'highlight.js/lib/languages/go'
+import javascript from 'highlight.js/lib/languages/javascript'
+import json from 'highlight.js/lib/languages/json'
+import markdown from 'highlight.js/lib/languages/markdown'
+import python from 'highlight.js/lib/languages/python'
+import typescript from 'highlight.js/lib/languages/typescript'
+import xml from 'highlight.js/lib/languages/xml'
+import yaml from 'highlight.js/lib/languages/yaml'
+import 'highlight.js/styles/github.css'
+
+for (const [name, lang] of Object.entries({ bash, css, diff, go, javascript, json, markdown, python, typescript, xml, yaml })) hljs.registerLanguage(name, lang)
+// ponytail: languages by file extension; register more here as agents touch other file types.
+const LANG_BY_EXT: Record<string, string> = {
+  sh: 'bash', bash: 'bash', zsh: 'bash', css: 'css', go: 'go', js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+  json: 'json', md: 'markdown', py: 'python', ts: 'typescript', tsx: 'typescript', html: 'xml', xml: 'xml', svg: 'xml', yml: 'yaml', yaml: 'yaml',
+}
+const langOf = (path: unknown) => LANG_BY_EXT[String(path ?? '').split('.').pop()?.toLowerCase() ?? '']
 
 // Shape of core's GET /api/hall. Kept local: web talks to core only over HTTP.
 type Visitor = {
@@ -26,10 +47,23 @@ type InteractiveSession = { sessionId: string; cwd: string; name: string; status
 let hall: Visitor[] = []
 let selectedId: string | null = null
 
-const booth = startBooth('scene', () => hall.find((v) => v.toolUseId === selectedId) ?? null, () => hall.length)
+// Desk objects open sheets over the scene, one at a time; the stamps under the scene stay usable.
+type Sheet = 'papers' | 'board' | 'ledger-sheet'
+let openSheet: Sheet | null = null
+function toggleSheet(name: Sheet | null) {
+  openSheet = name === openSheet ? null : name
+  document.querySelectorAll<HTMLElement>('.sheet').forEach((s) => s.toggleAttribute('open', s.id === openSheet))
+  document.querySelectorAll<HTMLElement>('#objects button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.sheet === openSheet)))
+}
+document.querySelectorAll<HTMLElement>('#objects button').forEach((b) => { b.onclick = () => toggleSheet(b.dataset.sheet as Sheet) })
+document.querySelectorAll<HTMLElement>('.sheet [data-close]').forEach((b) => { b.onclick = () => toggleSheet(null) })
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openSheet) toggleSheet(null) })
+
+const booth = startBooth('scene', () => hall.find((v) => v.toolUseId === selectedId) ?? null, () => hall.length, (object) => toggleSheet(object))
 
 const hallEl = document.querySelector<HTMLUListElement>('#hall')!
-const papersEl = document.querySelector<HTMLDivElement>('#papers')!
+const papersEl = document.querySelector<HTMLDivElement>('#papers .body')!
+const deskEl = document.querySelector<HTMLDivElement>('#desk')!
 const ledgerEl = document.querySelector<HTMLOListElement>('#ledger')!
 const otherEl = document.querySelector<HTMLUListElement>('#other')!
 
@@ -39,7 +73,33 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = ''): HTMLEleme
   return node
 }
 
-const boardEl = document.querySelector<HTMLDivElement>('#board div')!
+const meta = (text: string) => { const p = el('p', text); p.className = 'meta'; return p }
+
+/** A highlighted code block. hljs escapes its input, so agent-written text can't inject markup. */
+function code(text: string, language?: string): HTMLElement {
+  const pre = el('pre')
+  const c = el('code')
+  c.className = 'hljs'
+  if (language && hljs.getLanguage(language)) c.innerHTML = hljs.highlight(text, { language }).value
+  else c.textContent = text
+  pre.append(c)
+  return pre
+}
+
+/** The tool input as a reviewer reads it: the command, the file and its content, or the edit as a diff. */
+function toolView(v: Visitor): HTMLElement[] {
+  const i = v.toolInput
+  const s = (x: unknown) => (typeof x === 'string' ? x : '')
+  const lines = (prefix: string, t: string) => t.split('\n').map((l) => prefix + l).join('\n')
+  if (v.toolName === 'Bash' && typeof i.command === 'string')
+    return [...(i.description ? [el('p', `Purpose: ${s(i.description)}`)] : []), code(i.command, 'bash')]
+  if (v.toolName === 'Write' && typeof i.content === 'string') return [el('p', `File: ${s(i.file_path)}`), code(i.content, langOf(i.file_path))]
+  if (v.toolName === 'Edit' && typeof i.old_string === 'string')
+    return [el('p', `File: ${s(i.file_path)}${i.replace_all ? ' (every occurrence)' : ''}`), code(`${lines('-', i.old_string)}\n${lines('+', s(i.new_string))}`, 'diff')]
+  return [code(JSON.stringify(i, null, 2), 'json')]
+}
+
+const boardEl = document.querySelector<HTMLDivElement>('#board .body')!
 let boardFor: string | null = null
 
 // Load the rules for the visitor at the booth; a slow reply for an earlier visitor is dropped.
@@ -143,10 +203,17 @@ function render() {
   if (key === papersKey) return
   papersKey = key
   const v = hall.find((x) => x.toolUseId === selectedId)
-  if (!v) return papersEl.replaceChildren(el('p', 'The hall is empty.'))
+  if (!v) {
+    const cmd = el('code', 'claude -p "<task>" --settings ~/.local/state/prompts-please/agent-settings.json')
+    const hint = el('p', 'No visitors. Agents show up here when they need a stamp. Start one from a terminal: ')
+    hint.className = 'hint'
+    hint.append(cmd)
+    deskEl.replaceChildren(hint)
+    return papersEl.replaceChildren(el('p', 'The hall is empty.'))
+  }
   const note = el('textarea')
   note.placeholder = v.kind === 'incident' ? 'Reason (needed to Dismiss)' : 'Reason or note for the agent (needed to Refuse or Return)'
-  note.rows = 3
+  note.rows = 2
   note.value = drafts.get(v.toolUseId) ?? ''
   note.oninput = () => drafts.set(v.toolUseId, note.value)
   const button = (verdict: Verdict, label: string) => {
@@ -172,20 +239,19 @@ function render() {
     portrait,
     el('p', `${v.character.name} (${v.character.label}): ${t.level}, ${t.admitted} admitted, ${t.complaints} complaint${t.complaints === 1 ? '' : 's'}`),
     ...(v.kind === 'incident'
-      ? [el('h3', 'Incident report'), el('p', `Complaint about stamp ${v.against}: ${v.complaint}`), el('p', 'Admit upholds the complaint; Refuse dismisses it.')]
+      ? [el('h3', 'Incident report'), el('p', `Complaint about stamp ${v.against}: ${v.complaint}`), el('p', 'Uphold agrees with the complaint; Dismiss rejects it.')]
       : v.kind === 'finished'
       ? [el('h3', 'Finished work'), el('p', 'Return sends the note to the agent as its next instruction. Refuse closes it; the reason stays in the ledger.')]
       : [el('h3', `${v.toolName} request`)]),
     ...(v.stale ? [el('p', 'Stale: this session’s transcript is gone, so a stamp cannot resume the agent. It is still recorded.')] : []),
-    el('p', `Project: ${v.cwd}`),
-    el('p', `Session: ${v.sessionId}`),
     ...(v.kind === 'finished'
-      ? [el('pre', String(v.toolInput.message ?? '')), el('p', `Commits: ${(v.toolInput.commits as string[] | undefined)?.join(', ') || 'none'}`)]
-      : [el('pre', JSON.stringify(v.toolInput, null, 2))]),
+      ? [code(String(v.toolInput.message ?? ''), 'markdown'), el('p', `Commits: ${(v.toolInput.commits as string[] | undefined)?.join(', ') || 'none'}`)]
+      : toolView(v)),
+    meta(`Project: ${v.cwd}`),
+    meta(`Session: ${v.sessionId}`),
     interrogation(v.toolUseId),
-    note,
-    stamps,
   )
+  deskEl.replaceChildren(note, stamps)
 }
 
 async function errorText(res: Response): Promise<string> {
@@ -273,7 +339,7 @@ async function stamp(toolUseId: string, verdict: Verdict, text: string) {
   // If it's still here after a failure, go back to the pressed button to retry. A success with the visitor still shown is a
   // stale hall: leave focus alone, since that entry is about to vanish. Never a stamp button on a different visitor.
   if (!pressed || document.activeElement !== document.body) return
-  const target = selectedId !== toolUseId ? hallEl.querySelector<HTMLElement>('[aria-current]') : ok ? null : papersEl.querySelector<HTMLElement>(`button[data-verdict="${pressed}"]`)
+  const target = selectedId !== toolUseId ? hallEl.querySelector<HTMLElement>('[aria-current]') : ok ? null : deskEl.querySelector<HTMLElement>(`button[data-verdict="${pressed}"]`)
   target?.focus({ preventScroll: true })
 }
 

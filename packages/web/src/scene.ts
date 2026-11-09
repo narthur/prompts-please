@@ -3,6 +3,8 @@
 import Phaser from 'phaser'
 
 export type Verdict = 'admit' | 'refuse' | 'return'
+/** Desk objects the operator can click to open a sheet. */
+export type DeskObject = 'papers' | 'board' | 'ledger-sheet'
 export type SceneVisitor = {
   toolUseId: string
   kind: 'permission' | 'incident' | 'finished'
@@ -52,10 +54,12 @@ function thud() {
 class Booth extends Phaser.Scene {
   visitor: () => SceneVisitor | null
   waiting: () => number
-  constructor(visitor: () => SceneVisitor | null, waiting: () => number) {
+  open: (o: DeskObject) => void
+  constructor(visitor: () => SceneVisitor | null, waiting: () => number, open: (o: DeskObject) => void) {
     super('booth')
     this.visitor = visitor
     this.waiting = waiting
+    this.open = open
   }
   robot!: Phaser.GameObjects.Image
   form!: Phaser.GameObjects.Image
@@ -68,6 +72,8 @@ class Booth extends Phaser.Scene {
     this.load.image('booth', '/scenes/booth.png')
     for (let i = 1; i <= BUSTS; i++) this.load.image(`bust-${i}`, `/characters/busts/bust-${i}.png`)
     for (const f of Object.values(FORM_TEXTURE)) this.load.image(f, `/props/${f}.png`)
+    this.load.image('directive-board', '/props/directive-board.png')
+    this.load.image('ledger', '/props/ledger.png')
     for (const v of ['admit', 'refuse', 'return']) {
       this.load.image(`stamp-${v}`, `/props/stamp-${v}.png`)
       this.load.image(`ink-${v}`, `/props/ink-${v}.png`)
@@ -79,10 +85,22 @@ class Booth extends Phaser.Scene {
     this.robot = this.add.image(-60, COUNTER_Y, 'bust-1').setOrigin(0.5, 1).setScale(1.5)
     // The counter, drawn again over the robot so it stands behind it.
     this.add.image(0, 0, 'booth').setOrigin(0).setCrop(0, COUNTER_Y - 4, 312, 208)
-    this.form = this.add.image(FORM.x, FORM.y, 'form-permission').setScale(0.25).setAngle(-8).setVisible(false)
+    this.form = this.clickable(this.add.image(FORM.x, FORM.y, 'form-permission').setScale(0.25).setAngle(-8).setVisible(false), 'papers')
+    // ponytail: positions eyeballed against booth.png's empty wall and counter.
+    // The prop images have no alpha, so crop to the board's frame and the book's cover.
+    this.clickable(this.add.image(296, 52, 'directive-board').setCrop(24, 8, 264, 192).setScale(0.1), 'board')
+    this.clickable(this.add.image(262, 182, 'ledger').setCrop(40, 20, 236, 178).setScale(0.13).setAngle(4), 'ledger-sheet')
     const text = { fontFamily: 'monospace', fontSize: '9px', color: '#ffe9a8', backgroundColor: '#000b', padding: { x: 4, y: 3 } }
     this.speech = this.add.text(WINDOW_X, 30, '', { ...text, wordWrap: { width: 210 }, align: 'center' }).setOrigin(0.5, 0)
     this.sign = this.add.text(6, 4, '', text)
+  }
+
+  /** Hand cursor and a warm highlight on hover; a click opens that object's sheet. */
+  clickable(img: Phaser.GameObjects.Image, o: DeskObject) {
+    return img.setInteractive({ useHandCursor: true })
+      .on('pointerover', () => img.setTint(0xfff2b0))
+      .on('pointerout', () => img.clearTint())
+      .on('pointerdown', () => this.open(o))
   }
 
   update() {
@@ -140,8 +158,9 @@ class Booth extends Phaser.Scene {
   }
 }
 
-export function startBooth(parent: string, visitor: () => SceneVisitor | null, waiting: () => number): { slam(verdict: Verdict): void } {
-  const scene = new Booth(visitor, waiting)
-  new Phaser.Game({ type: Phaser.AUTO, parent, width: 312, height: 208, pixelArt: true, scene })
+export function startBooth(parent: string, visitor: () => SceneVisitor | null, waiting: () => number, open: (o: DeskObject) => void): { slam(verdict: Verdict): void } {
+  const scene = new Booth(visitor, waiting, open)
+  // FIT scales the 312x208 scene to whatever room the layout gives it, so the page never scrolls.
+  new Phaser.Game({ type: Phaser.AUTO, parent, width: 312, height: 208, pixelArt: true, scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }, scene })
   return { slam: (verdict) => { if (scene.sys.isActive()) scene.slam(verdict) } }
 }
