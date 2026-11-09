@@ -37,7 +37,10 @@
     #papers .interrogation .ask { display: flex; gap: 8px; margin-top: 8px; }
     #papers .interrogation input { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; border: 2px solid #b5a985; background: #fbf7ea; color: inherit; }
     #papers .interrogation > p:last-child { opacity: 0.65; font-size: 0.85em; } #papers .interrogation p { white-space: pre-wrap; margin: 4px 0; }
-    #board .body pre { background: #e8eef1; color: #1f2a30; padding: 8px; user-select: text; }
+    #board .body pre { user-select: text; }
+    /* Markdown stays raw (the # and ** show); headings just read bigger and in their own colour. */
+    #board .hljs-section { color: #8a3b12; font-weight: bold; font-size: 1.2em; }
+    #board .hljs-strong { font-weight: bold; } #board .hljs-emphasis { font-style: italic; }
     #ledger { padding-left: 0; list-style: none; font-size: 13px; margin: 0; }
     #ledger li { padding: 3px 0; border-bottom: 1px dotted #b5a985; }
     aside { display: flex; flex-direction: column; min-height: 0; background: #1b1a17cc; padding: 6px 8px; }

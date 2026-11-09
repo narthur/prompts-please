@@ -146,7 +146,7 @@ async function showBoard(id: string | null) {
     const res = await fetch(`/api/hall/${encodeURIComponent(id)}/directives`)
     const rules: { source: string; text: string }[] = res.ok ? await res.json() : []
     content = res.ok
-      ? rules.flatMap((r) => [el('h4', r.source), el('pre', r.text)])
+      ? rules.flatMap((r) => [el('h4', r.source), code(r.text, 'markdown')])
       : [el('p', `Could not load the rules: ${await errorText(res)}`)]
     if (res.ok && !rules.length) content = [el('p', 'No CLAUDE.md applies to this visitor.')]
     failed = !res.ok
