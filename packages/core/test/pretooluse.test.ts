@@ -36,6 +36,10 @@ test.each([undefined, null, 'x'])('tool_input %j is blocked', (toolInput) => {
   expect(gate({ ...call, tool_input: toolInput })).toEqual({ exitCode: 2, stderr: 'prompts-please hook: payload missing tool_input' })
 })
 
+test('an array tool_input is accepted, as it always was (typeof [] is object)', () => {
+  expect(decision(gate({ ...call, tool_input: [] }))).toMatchObject({ permissionDecision: 'defer' })
+})
+
 test.each(['../etc', 'a/b', 'a b', ''])('an unsafe session_id %j is blocked', (id) => {
   expect(gate({ ...call, session_id: id })).toEqual({ exitCode: 2, stderr: 'prompts-please hook: bad session_id' })
 })
@@ -51,7 +55,7 @@ test('an unstamped call is parked in the hall and deferred', () => {
   const r = gate(call)
   expect(r).toEqual({ exitCode: 0, stdout: expect.any(String) })
   expect(decision(r)).toEqual({ hookEventName: 'PreToolUse', permissionDecision: 'defer', permissionDecisionReason: 'Parked in the hall for the operator.' })
-  expect(listHall(dir)).toMatchObject([{ toolUseId: call.tool_use_id, sessionId: call.session_id }])
+  expect(listHall(dir)).toMatchObject([{ toolUseId: call.tool_use_id, sessionId: call.session_id, cwd: call.cwd, toolName: call.tool_name, toolInput: call.tool_input }])
 })
 
 test('the job comes from the env value, never from the payload', () => {

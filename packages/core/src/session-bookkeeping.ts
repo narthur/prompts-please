@@ -22,7 +22,7 @@ export type SessionHookInputs = {
 // ponytail: one small file per session, never cleaned up; prune old ones if the folder ever matters.
 type Base = { cwd: string; sha: string | null }
 
-/** Returns a message for stderr when the payload is unusable; always exit 0, never block the agent over bookkeeping. */
+/** Returns a message for stderr when the payload is unusable (the shim then exits 0). Throws on unparseable stdin or I/O errors, which the shim lets surface as exit 1; neither blocks the agent. */
 export function sessionHook({ stdin, stateDir, job: rawJob, git }: SessionHookInputs): { stderr?: string } {
   const input = JSON.parse(stdin)
   const { session_id: sessionId, cwd } = input ?? {}
