@@ -48,7 +48,7 @@ let hall: Visitor[] = []
 let selectedId: string | null = null
 
 // Desk objects open sheets over the scene; the stamps below stay usable.
-type Sheet = 'papers' | 'board' | 'ledger-sheet' | 'other-sheet' | 'notes-sheet'
+type Sheet = 'papers' | 'board' | 'ledger-sheet' | 'other-sheet' | 'notes-sheet' | 'notice-sheet'
 // Any number can be open; the one last touched sits on top and Esc closes it.
 let topZ = 10
 const raise = (sheet: HTMLElement) => { sheet.style.zIndex = String(++topZ) }
@@ -245,7 +245,7 @@ function render() {
   const v = hall.find((x) => x.toolUseId === selectedId)
   if (!v) {
     const cmd = el('code', 'claude -p "<task>" --settings ~/.local/state/prompts-please/agent-settings.json')
-    const hint = el('p', 'No visitors. Agents show up here when they need a stamp. Start one from a terminal: ')
+    const hint = el('p', 'No visitors. Post a job on Help Wanted and a robot comes to the window when it needs a stamp. Or start one from a terminal: ')
     hint.className = 'hint'
     hint.append(cmd)
     deskEl.replaceChildren(hint)
@@ -346,7 +346,7 @@ async function refresh() {
   problem = why
   render()
   // The ledger is secondary: if it fails, keep showing the last good one.
-  try { if (ledgerRes.status === 'fulfilled' && ledgerRes.value.ok) renderLedger(await ledgerRes.value.json()) } catch {}
+  try { if (ledgerRes.status === 'fulfilled' && ledgerRes.value.ok) { const entries: LedgerEntry[] = await ledgerRes.value.json(); renderLedger(entries); addSites(entries.map((e) => e.cwd)) } } catch {}
   try {
     if (otherRes.status === 'fulfilled' && otherRes.value.ok) renderOther(await otherRes.value.json())
     else otherEl.replaceChildren(el('li', 'Could not read the other window.'))
@@ -368,7 +368,11 @@ async function stamp(toolUseId: string, verdict: Verdict, text: string) {
       headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
       body: JSON.stringify(verdict === 'admit' ? { verdict } : verdict === 'refuse' ? { verdict, reason: text } : { verdict, note: text }),
     })
-    if (res.ok) { ok = true; drafts.delete(toolUseId); booth.slam(verdict) }
+    if (res.ok) {
+      ok = true; drafts.delete(toolUseId); booth.slam(verdict)
+      // The visitor takes its papers and rules with it; the operator's own sheets stay put.
+      toggleSheet('papers', false); toggleSheet('board', false)
+    }
     else alert(`Stamp failed: ${await errorText(res)}`)
   } catch {
     alert('Stamp failed: bureau unreachable')
@@ -414,6 +418,50 @@ async function scanReverts() {
   await refresh()
 }
 document.querySelector<HTMLButtonElement>('#scan-reverts')!.onclick = scanReverts
+
+// Help Wanted: post a notice and the bureau sends a fresh agent out on it; it shows up in the hall when it needs a stamp.
+type Notice = { task: string; cwd: string; postedAt: string }
+const noticeForm = document.querySelector<HTMLFormElement>('#notice-form')!
+const noticesEl = document.querySelector<HTMLUListElement>('#notices')!
+const sites = new Set<string>() // project folders seen in the ledger and on notices, offered as Site suggestions
+function addSites(cwds: string[]) {
+  const before = sites.size
+  for (const c of cwds) sites.add(c)
+  if (sites.size !== before) document.querySelector('#sites')!.replaceChildren(...[...sites].sort().map((c) => Object.assign(el('option'), { value: c })))
+}
+async function loadNotices() {
+  try {
+    const res = await fetch('/api/notices')
+    if (!res.ok) return noticesEl.replaceChildren(el('li', `Could not load notices: ${await errorText(res)}`))
+    const notices: Notice[] = await res.json()
+    addSites(notices.map((n) => n.cwd))
+    noticesEl.replaceChildren(...(notices.length
+      ? notices.slice(0, 20).map((n) => el('li', `${new Date(n.postedAt).toLocaleString()} · ${n.cwd.split('/').pop()} · ${n.task}`))
+      : [el('li', 'No notices posted yet.')]))
+  } catch {
+    noticesEl.replaceChildren(el('li', 'Could not load notices: bureau unreachable'))
+  }
+}
+noticeForm.onsubmit = async (e) => {
+  e.preventDefault()
+  const data = new FormData(noticeForm)
+  const button = noticeForm.querySelector('button')!
+  button.disabled = true
+  try {
+    const res = await fetch('/api/notices', {
+      method: 'POST',
+      headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ task: data.get('task'), cwd: data.get('cwd') }),
+    })
+    if (res.ok) noticeForm.querySelector('textarea')!.value = ''
+    else alert(`Notice not posted: ${await errorText(res)}`)
+  } catch {
+    alert('Notice not posted: bureau unreachable')
+  }
+  button.disabled = false
+  loadNotices()
+}
+document.querySelector<HTMLElement>('[data-sheet="notice-sheet"]')!.addEventListener('click', loadNotices)
 
 refresh()
 setInterval(refresh, 2000)

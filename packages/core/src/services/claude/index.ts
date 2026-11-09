@@ -11,33 +11,42 @@ export class Upstream extends Error {}
  * Resume a headless session: with no prompt, a parked tool call's hook fires again and finds the stamp;
  * with a prompt (returned finished work), the agent gets the note as its next instruction.
  * The job label is passed on so the resumed run stays the same character.
- * Runs detached; output goes to a log under the state directory.
  * ponytail: resumes with default flags; the original run's --model etc. aren't recorded yet.
  */
 export function resumeSession(opts: { sessionId: string; cwd: string; prompt?: string; job?: string; settingsPath: string; stateDir: string; onExit?: () => void }): void {
+  launch(`resume of ${opts.sessionId}`, opts.sessionId, ['--resume', opts.sessionId], opts)
+}
+
+/** Start a fresh headless agent on a task (a Help Wanted notice), under the bureau's hooks. */
+export function startSession(opts: { task: string; cwd: string; settingsPath: string; stateDir: string }): void {
+  launch('notice agent', `notice`, [], { ...opts, prompt: opts.task })
+}
+
+// Runs `claude -p` detached; output goes to a log under the state directory.
+function launch(what: string, logName: string, args: string[], opts: { cwd: string; prompt?: string; job?: string; settingsPath: string; stateDir: string; onExit?: () => void }): void {
   const logDir = join(opts.stateDir, 'runs')
   mkdirSync(logDir, { recursive: true })
-  const log = openSync(join(logDir, `${opts.sessionId}-${Date.now()}.json`), 'a')
+  const log = openSync(join(logDir, `${logName}-${Date.now()}.json`), 'a')
   let child
   try {
     child = spawn(
       'claude',
-      ['-p', '--resume', opts.sessionId, '--settings', opts.settingsPath, '--output-format', 'json'],
+      ['-p', ...args, '--settings', opts.settingsPath, '--output-format', 'json'],
       {
         cwd: opts.cwd,
         env: { ...process.env, PROMPTS_PLEASE_JOB: opts.job }, // undefined drops the server's own value
-        // The prompt goes in on stdin, so a note starting with "-" can't be read as a flag.
+        // The prompt goes in on stdin, so one starting with "-" can't be read as a flag.
         stdio: [opts.prompt === undefined ? 'ignore' : 'pipe', log, log],
         detached: true,
       },
     )
   } finally { closeSync(log) } // the child has its own copy
-  child.stdin?.on('error', (e) => console.error(`prompt for ${opts.sessionId} not delivered: ${e.message}`))
+  child.stdin?.on('error', (e) => console.error(`prompt for ${what} not delivered: ${e.message}`))
   child.stdin?.end(opts.prompt)
   // Without this, a missing `claude` on PATH (ENOENT) would crash the whole bureau.
-  child.on('error', (e) => { console.error(`resume of ${opts.sessionId} failed to start: ${e.message}`); opts.onExit?.() })
+  child.on('error', (e) => { console.error(`${what} failed to start: ${e.message}`); opts.onExit?.() })
   child.on('exit', (code, signal) => {
-    if (code || signal) console.error(`resume of ${opts.sessionId} ended with ${code ?? signal}; see ${logDir}`)
+    if (code || signal) console.error(`${what} ended with ${code ?? signal}; see ${logDir}`)
     opts.onExit?.()
   })
   child.unref()

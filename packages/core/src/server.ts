@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { dailySummary, directives, fileComplaint, interrogate, listHall, listOtherWindow, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
+import { dailySummary, directives, fileComplaint, interrogate, listHall, listNotices, listOtherWindow, matchReverts, NotFound, parseDecision, postNotice, readLedger, stamp } from './bureau.ts'
 import { globalDirectives, matcher, port, sessionsDir, stateDir, summaryDir } from './config.ts'
 import { createStamper } from './resume-queue.ts'
 import * as claude from './services/claude/index.ts'
@@ -142,6 +142,20 @@ createServer((req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/reverts/scan') return send(res, 200, scanReverts())
+
+  // Help Wanted: record the notice, then send a fresh agent out on it. It arrives in the hall at its first parked tool call.
+  if (req.method === 'GET' && url.pathname === '/api/notices') return send(res, 200, listNotices(stateDir))
+  if (req.method === 'POST' && url.pathname === '/api/notices') {
+    readBody(req).then((raw) => {
+      const body = parseJson(raw) as { task?: unknown; cwd?: unknown } | null
+      if (typeof body?.task !== 'string' || typeof body?.cwd !== 'string') return send(res, 400, { error: 'body must be {"task": string, "cwd": string}' })
+      let notice
+      try { notice = postNotice(stateDir, { task: body.task, cwd: body.cwd }) } catch (e) { return sendError(res, e) }
+      claude.startSession({ task: notice.task, cwd: notice.cwd, settingsPath, stateDir })
+      send(res, 200, notice)
+    }, () => send(res, 413, { error: 'body too large' }))
+    return
+  }
 
   send(res, 404, { error: 'not found' })
 }).listen(port, '127.0.0.1', () => {

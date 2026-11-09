@@ -1,6 +1,6 @@
 // The bureau: the hall of waiting visitors and the decisions stamped on them.
 // State lives in a directory so the hook (a separate process per tool call) and the server share it.
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 
 /** A PreToolUse hook payload, as Claude Code sends it on stdin. */
@@ -417,4 +417,30 @@ export function dailySummary(entries: LedgerEntry[], date: string): string {
     ...lines,
     '',
   ].join('\n')
+}
+
+/** A Help Wanted notice: a job the operator posted for a robot in the hall to take. */
+export type Notice = { task: string; cwd: string; postedAt: string }
+
+const noticesFile = (dir: string) => join(dir, 'notices.jsonl')
+
+/** Record a notice; the caller launches the agent that answers it. */
+export function postNotice(dir: string, input: { task: string; cwd: string }, now = new Date()): Notice {
+  const task = input.task.trim()
+  if (!task) throw new Error('a notice needs a job')
+  let isDir = false
+  try { isDir = isAbsolute(input.cwd) && statSync(input.cwd).isDirectory() } catch {}
+  if (!isDir) throw new Error('the site must be an existing folder (an absolute path)')
+  const notice: Notice = { task, cwd: input.cwd, postedAt: now.toISOString() }
+  mkdirSync(dir, { recursive: true })
+  appendFileSync(noticesFile(dir), JSON.stringify(notice) + '\n')
+  return notice
+}
+
+/** Posted notices, newest first. A torn or foreign line is skipped. */
+export function listNotices(dir: string): Notice[] {
+  if (!existsSync(noticesFile(dir))) return []
+  return readFileSync(noticesFile(dir), 'utf8').split('\n').flatMap((line) => {
+    try { const n = JSON.parse(line); return typeof n?.task === 'string' && typeof n?.cwd === 'string' ? [n as Notice] : [] } catch { return [] }
+  }).reverse()
 }

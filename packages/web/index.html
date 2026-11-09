@@ -38,6 +38,15 @@
     #papers .interrogation input { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; border: 2px solid #b5a985; background: #fbf7ea; color: inherit; }
     #papers .interrogation > p:last-child { opacity: 0.65; font-size: 0.85em; } #papers .interrogation p { white-space: pre-wrap; margin: 4px 0; }
     #board .body pre { user-select: text; }
+    #notice-sheet .body { background: repeating-linear-gradient(0deg, #f1e9d2 0 23px, #e6dcc0 23px 24px); }
+    #notice-form { display: flex; flex-direction: column; gap: 8px; border: 2px dashed #8a6d2a; padding: 10px 12px; }
+    #notice-form .form-no { margin: 0; font-size: 0.8em; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.08em; }
+    #notice-form .wanted { margin: 0; font-size: 1.8em; letter-spacing: 0.12em; color: #8a3b12; text-align: center; }
+    #notice-form label { display: flex; flex-direction: column; gap: 2px; font-weight: bold; }
+    #notice-form textarea, #notice-form input { font: inherit; font-weight: normal; padding: 6px 8px; border: 2px solid #b5a985; background: #fbf7ea; color: inherit; margin: 0; }
+    #notice-form button { align-self: flex-end; background: #8a3b12; }
+    #notices { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+    #notices li { padding: 4px 0; border-bottom: 1px dotted #b5a985; }
     #notes { display: block; width: 100%; height: 100%; min-height: 240px; margin: 0; resize: none; border: 0; background: #fbf7ea; color: inherit; padding: 8px; }
     /* Markdown stays raw (the # and ** show); headings just read bigger and in their own colour. */
     #board .hljs-section { color: #8a3b12; font-weight: bold; font-size: 1.2em; }
@@ -70,6 +79,7 @@
         <button data-sheet="board" aria-pressed="false">Rules (CLAUDE.md)</button>
         <button data-sheet="ledger-sheet" aria-pressed="false">Ledger</button>
         <button data-sheet="other-sheet" aria-pressed="false">Other window</button>
+        <button data-sheet="notice-sheet" aria-pressed="false">Help Wanted</button>
         <button data-sheet="notes-sheet" aria-pressed="false">Notes</button>
       </div>
       <div id="desk"></div>
@@ -82,6 +92,18 @@
       <section class="sheet" id="papers" aria-label="Papers"><header><h2>Papers</h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"></div></section>
       <section class="sheet" id="board" aria-label="Rules"><header><h2>Rules: CLAUDE.md</h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"></div></section>
       <section class="sheet" id="ledger-sheet" aria-label="Ledger"><header><h2>Ledger <button id="scan-reverts" class="small">Check for reverts</button></h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"><ol id="ledger"></ol></div></section>
+      <section class="sheet" id="notice-sheet" aria-label="Help Wanted"><header><h2>Help Wanted</h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body">
+        <form id="notice-form">
+          <p class="form-no">Bureau form LR-1 · Labour requisition</p>
+          <h3 class="wanted">HELP WANTED</h3>
+          <label>Job<textarea name="task" rows="4" required placeholder="What should the robot do? Jobs that change files or run commands come to your window for clearance."></textarea></label>
+          <label>Site<input name="cwd" list="sites" required placeholder="/absolute/path/to/the/project"></label>
+          <datalist id="sites"></datalist>
+          <button type="submit">Post notice</button>
+        </form>
+        <h4>Posted</h4>
+        <ul id="notices"></ul>
+      </div></section>
       <section class="sheet" id="notes-sheet" aria-label="Notes"><header><h2>Notes</h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"><textarea id="notes" placeholder="Your own notes. Kept in this browser; agents never see them."></textarea></div></section>
       <section class="sheet" id="other-sheet" aria-label="Other window"><header><h2>Other window</h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"><p class="hint">Interactive sessions. Remote Control handles their approvals.</p><ul id="other"></ul></div></section>
   </main>
