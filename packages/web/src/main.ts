@@ -48,7 +48,7 @@ let hall: Visitor[] = []
 let selectedId: string | null = null
 
 // Desk objects open sheets over the scene, one at a time; the stamps under the scene stay usable.
-type Sheet = 'papers' | 'board' | 'ledger-sheet'
+type Sheet = 'papers' | 'board' | 'ledger-sheet' | 'other-sheet'
 let openSheet: Sheet | null = null
 function toggleSheet(name: Sheet | null) {
   openSheet = name === openSheet ? null : name

@@ -6,12 +6,13 @@
   <title>Prompts Please</title>
   <style>
     html, body { height: 100%; }
-    body { margin: 0; background: #1b1a17; color: #e8e2d0; font: 15px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
-    /* One screen, no page scroll: long things scroll inside their own panel. */
-    main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; padding: 12px; height: 100%; box-sizing: border-box; }
-    #left { position: relative; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-    #scene { flex: 1; min-height: 0; }
+    body { margin: 0; background: #0e0d0b; color: #e8e2d0; font: 15px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
+    /* The game takes the whole page: the scene above, a wooden desk strip below, sheets laid over the scene. */
+    main { position: fixed; inset: 0; display: grid; grid-template-rows: minmax(0, 1fr) 150px; }
+    #scene { min-height: 0; }
     #scene canvas { image-rendering: pixelated; }
+    #strip { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; padding: 10px 12px; background: #3b2a1b; border-top: 4px solid #5a4f3a; box-shadow: inset 0 6px 12px #0006; min-height: 0; }
+    #bottom { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
     #objects { display: flex; gap: 8px; }
     #objects button { background: #4a4436; }
     #objects button[aria-pressed="true"] { background: #d9b45a; color: #1b1a17; }
@@ -20,7 +21,7 @@
     #desk .hint { opacity: 0.8; font-size: 0.9em; }
     #desk code { background: #2c2a24; padding: 1px 4px; user-select: all; }
     /* A sheet opened from a desk object sits over the scene; the stamps below stay usable. */
-    .sheet { position: absolute; inset: 0 0 auto 0; max-height: calc(100% - 120px); margin: 0; padding: 0; border: 3px solid #5a4f3a; background: #f1e9d2; color: #2a2620; overflow: hidden; display: none; flex-direction: column; box-shadow: 0 8px 30px #000a; }
+    .sheet { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); width: min(900px, calc(100% - 24px)); box-sizing: border-box; max-height: calc(100% - 186px); margin: 0; padding: 0; border: 3px solid #5a4f3a; background: #f1e9d2; color: #2a2620; overflow: hidden; display: none; flex-direction: column; box-shadow: 0 8px 30px #000a; }
     .sheet[open] { display: flex; }
     .sheet header { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #d8ccab; }
     .sheet header h2 { margin: 0; font-size: 1em; }
@@ -34,12 +35,12 @@
     #board .body pre { background: #e8eef1; color: #1f2a30; padding: 8px; user-select: text; }
     #ledger { padding-left: 0; list-style: none; font-size: 13px; margin: 0; }
     #ledger li { padding: 3px 0; border-bottom: 1px dotted #b5a985; }
-    aside { display: flex; flex-direction: column; min-height: 0; }
-    aside h2 { margin: 4px 0 8px; font-size: 1.1em; }
+    aside { display: flex; flex-direction: column; min-height: 0; background: #1b1a17cc; padding: 6px 8px; }
+    aside h2 { margin: 0 0 6px; font-size: 1em; }
     #hall { list-style: none; padding: 0; margin: 0; overflow: auto; flex: 1; min-height: 0; }
     #hall li { padding: 6px 8px; border: 1px solid #4a4436; margin-bottom: 6px; cursor: pointer; }
     #hall li.selected { border-color: #d9b45a; }
-    #other { opacity: 0.5; cursor: default; padding-left: 18px; max-height: 25vh; overflow: auto; } .hint { font-size: 0.8em; opacity: 0.7; margin: 0; }
+    #other { cursor: default; padding-left: 18px; margin: 6px 0 0; } .hint { font-size: 0.8em; opacity: 0.7; margin: 0; }
     textarea { width: 100%; box-sizing: border-box; font: inherit; margin: 8px 0; }
     .stamps { display: flex; gap: 8px; flex-wrap: wrap; }
     button { font: inherit; padding: 6px 14px; background: #3c7a3c; color: #fff; border: 0; cursor: pointer; }
@@ -47,30 +48,31 @@
     button[data-verdict="refuse"] { background: #9a3a2e; }
     button[data-verdict="return"] { background: #8a6d2a; }
     button.small { padding: 1px 6px; font-size: 12px; background: #5a4f3a; }
-    @media (max-width: 720px) { body { overflow: auto; } main { grid-template-columns: 1fr; height: auto; } #scene { height: 50vh; flex: none; } }
+    @media (max-width: 720px) { body { overflow: auto; } main { position: static; display: block; } #scene { height: 50vh; } #strip { grid-template-columns: 1fr; } .sheet { position: fixed; max-height: calc(100% - 24px); } }
   </style>
 </head>
 <body>
   <main>
-    <section id="left">
       <div id="scene" role="img" aria-label="The booth: the visitor at the window, its form on the counter, the rules board on the wall and the ledger on the desk. Click them, or use the buttons below, to open them."></div>
+      <section id="strip">
+      <div id="bottom">
       <div id="objects">
         <button data-sheet="papers" aria-pressed="false">Papers</button>
         <button data-sheet="board" aria-pressed="false">Rules (CLAUDE.md)</button>
         <button data-sheet="ledger-sheet" aria-pressed="false">Ledger</button>
+        <button data-sheet="other-sheet" aria-pressed="false">Other window</button>
       </div>
       <div id="desk"></div>
+      </div>
+      <aside>
+        <h2>Hall</h2>
+        <ul id="hall"></ul>
+      </aside>
+      </section>
       <section class="sheet" id="papers" aria-label="Papers"><header><h2>Papers</h2><button data-close>Close (Esc)</button></header><div class="body"></div></section>
       <section class="sheet" id="board" aria-label="Rules"><header><h2>Rules: CLAUDE.md</h2><button data-close>Close (Esc)</button></header><div class="body"></div></section>
       <section class="sheet" id="ledger-sheet" aria-label="Ledger"><header><h2>Ledger <button id="scan-reverts" class="small">Check for reverts</button></h2><button data-close>Close (Esc)</button></header><div class="body"><ol id="ledger"></ol></div></section>
-    </section>
-    <aside>
-      <h2>Hall</h2>
-      <ul id="hall"></ul>
-      <h2>Other window</h2>
-      <p class="hint">Interactive sessions. Remote Control handles their approvals.</p>
-      <ul id="other"></ul>
-    </aside>
+      <section class="sheet" id="other-sheet" aria-label="Other window"><header><h2>Other window</h2><button data-close>Close (Esc)</button></header><div class="body"><p class="hint">Interactive sessions. Remote Control handles their approvals.</p><ul id="other"></ul></div></section>
   </main>
   <script type="module" src="/src/main.ts"></script>
 </body>
