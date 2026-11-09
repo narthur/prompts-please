@@ -38,6 +38,7 @@
     #papers .interrogation input { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; border: 2px solid #b5a985; background: #fbf7ea; color: inherit; }
     #papers .interrogation > p:last-child { opacity: 0.65; font-size: 0.85em; } #papers .interrogation p { white-space: pre-wrap; margin: 4px 0; }
     #board .body pre { user-select: text; }
+    #notes { display: block; width: 100%; height: 100%; min-height: 240px; margin: 0; resize: none; border: 0; background: #fbf7ea; color: inherit; padding: 8px; }
     /* Markdown stays raw (the # and ** show); headings just read bigger and in their own colour. */
     #board .hljs-section { color: #8a3b12; font-weight: bold; font-size: 1.2em; }
     #board .hljs-strong { font-weight: bold; } #board .hljs-emphasis { font-style: italic; }
@@ -69,6 +70,7 @@
         <button data-sheet="board" aria-pressed="false">Rules (CLAUDE.md)</button>
         <button data-sheet="ledger-sheet" aria-pressed="false">Ledger</button>
         <button data-sheet="other-sheet" aria-pressed="false">Other window</button>
+        <button data-sheet="notes-sheet" aria-pressed="false">Notes</button>
       </div>
       <div id="desk"></div>
       </div>
@@ -80,6 +82,7 @@
       <section class="sheet" id="papers" aria-label="Papers"><header><h2>Papers</h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"></div></section>
       <section class="sheet" id="board" aria-label="Rules"><header><h2>Rules: CLAUDE.md</h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"></div></section>
       <section class="sheet" id="ledger-sheet" aria-label="Ledger"><header><h2>Ledger <button id="scan-reverts" class="small">Check for reverts</button></h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"><ol id="ledger"></ol></div></section>
+      <section class="sheet" id="notes-sheet" aria-label="Notes"><header><h2>Notes</h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"><textarea id="notes" placeholder="Your own notes. Kept in this browser; agents never see them."></textarea></div></section>
       <section class="sheet" id="other-sheet" aria-label="Other window"><header><h2>Other window</h2><button data-close aria-label="Close (Esc)" title="Close (Esc)">✕</button></header><div class="body"><p class="hint">Interactive sessions. Remote Control handles their approvals.</p><ul id="other"></ul></div></section>
   </main>
   <script type="module" src="/src/main.ts"></script>

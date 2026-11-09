@@ -48,7 +48,7 @@ let hall: Visitor[] = []
 let selectedId: string | null = null
 
 // Desk objects open sheets over the scene; the stamps below stay usable.
-type Sheet = 'papers' | 'board' | 'ledger-sheet' | 'other-sheet'
+type Sheet = 'papers' | 'board' | 'ledger-sheet' | 'other-sheet' | 'notes-sheet'
 // Any number can be open; the one last touched sits on top and Esc closes it.
 let topZ = 10
 const raise = (sheet: HTMLElement) => { sheet.style.zIndex = String(++topZ) }
@@ -59,6 +59,10 @@ function toggleSheet(name: Sheet, open?: boolean) {
   if (on) raise(sheet)
   document.querySelector(`#objects button[data-sheet="${name}"]`)?.setAttribute('aria-pressed', String(on))
 }
+// The operator's scratchpad: saved in this browser as they type. Storage can be blocked (private window), so it degrades to unsaved.
+const notesEl = document.querySelector<HTMLTextAreaElement>('#notes')!
+try { notesEl.value = localStorage.getItem('pp-notes') ?? '' } catch {}
+notesEl.oninput = () => { try { localStorage.setItem('pp-notes', notesEl.value) } catch {} }
 document.querySelectorAll<HTMLElement>('#objects button').forEach((b) => { b.onclick = () => toggleSheet(b.dataset.sheet as Sheet) })
 document.querySelectorAll<HTMLElement>('.sheet').forEach((s) => {
   s.addEventListener('pointerdown', (e) => {
