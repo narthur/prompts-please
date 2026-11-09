@@ -58,6 +58,22 @@ function toggleSheet(name: Sheet | null) {
 document.querySelectorAll<HTMLElement>('#objects button').forEach((b) => { b.onclick = () => toggleSheet(b.dataset.sheet as Sheet) })
 document.querySelectorAll<HTMLElement>('.sheet [data-close]').forEach((b) => { b.onclick = () => toggleSheet(null) })
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && openSheet) toggleSheet(null) })
+// Drag a sheet by its title bar; it stays where it was left. Clamped so the bar can't leave the screen.
+document.querySelectorAll<HTMLElement>('.sheet header').forEach((bar) => {
+  const sheet = bar.parentElement!
+  bar.onpointerdown = (e) => {
+    if ((e.target as HTMLElement).closest('button')) return
+    const r = sheet.getBoundingClientRect()
+    const dx = e.clientX - r.left, dy = e.clientY - r.top
+    bar.setPointerCapture(e.pointerId)
+    bar.onpointermove = (m) => {
+      sheet.style.transform = 'none'
+      sheet.style.left = `${Math.min(Math.max(m.clientX - dx, 0), innerWidth - 80)}px`
+      sheet.style.top = `${Math.min(Math.max(m.clientY - dy, 0), innerHeight - 40)}px`
+    }
+    bar.onpointerup = () => { bar.onpointermove = null }
+  }
+})
 
 const booth = startBooth('scene', () => hall.find((v) => v.toolUseId === selectedId) ?? null, () => hall.length, (object) => toggleSheet(object))
 
@@ -139,7 +155,8 @@ function interrogation(id: string): HTMLElement {
   const show = (line: string) => { log.append(el('p', line)); transcripts.set(id, [...(transcripts.get(id) ?? []), line]) }
   for (const line of transcripts.get(id) ?? []) log.append(el('p', line))
   const q = el('input')
-  q.placeholder = 'Ask a question (a fresh copy of the agent answers each one; the agent itself is untouched)'
+  q.placeholder = 'Ask the agent a question'
+  q.title = 'A fresh copy of the agent answers each question; the agent itself is untouched.'
   q.value = questionDrafts.get(id) ?? ''
   q.oninput = () => questionDrafts.set(id, q.value)
   const ask = el('button', 'Interrogate')
@@ -167,7 +184,10 @@ function interrogation(id: string): HTMLElement {
     papersKey = '' // rebuild, so the answer shows even if the papers were redrawn meanwhile
     render()
   }
-  box.append(log, q, ask)
+  const row = el('div')
+  row.className = 'ask'
+  row.append(q, ask)
+  box.append(log, row, el('p', 'A fresh copy of the agent answers; the waiting agent is untouched.'))
   return box
 }
 
