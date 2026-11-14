@@ -40,10 +40,35 @@ export class NotFound extends Error {}
 /** What the visitor is carrying: the tool call it wants, or the one a complaint is about. */
 type Papers = { sessionId: string; cwd: string; toolName: string; toolInput: Record<string, unknown>; job?: string }
 
-type HallEntry =
+/** A hall file as stored: permission keeps its raw hook form, the other kinds a normalized papers record. */
+type HallFile =
   | { kind?: 'permission'; form: PermissionForm; arrivedAt: string }
   | { kind: 'incident'; id: string; against: string; complaint: string; papers: Papers; arrivedAt: string }
   | { kind: 'finished'; id: string; papers: Papers; arrivedAt: string }
+
+/** A hall entry in memory: one shape for every kind, so the old on-disk files need no migration. `raw` is what to write back. */
+type HallEntry = {
+  kind: 'permission' | 'incident' | 'finished'; id: string; papers: Papers; arrivedAt: string
+  transcriptPath?: string; against?: string; complaint?: string; raw: HallFile
+}
+
+/** What each kind of visitor does; the operations read these instead of branching on kind. */
+const RULES: Record<HallEntry['kind'], {
+  /** A hook is parked waiting on this visitor, so stamping writes a decision file and the session is already standing. */
+  awaitsHook: boolean
+  /** Only a tool call has a transcript to go missing. */
+  staleCheck: boolean
+  /** Record the commits this visitor covers in the ledger. */
+  covers: boolean
+  /** A verdict this kind can't take. */
+  rejects?: { verdict: Decision['verdict']; message: string }
+  /** The session to resume after a stamp: null for none, a prompt when the note is handed back. */
+  resume: (d: Decision) => { prompt?: string } | null
+}> = {
+  permission: { awaitsHook: true, staleCheck: true, covers: false, resume: () => ({}) },
+  incident: { awaitsHook: false, staleCheck: false, covers: false, rejects: { verdict: 'return', message: 'an incident is upheld or dismissed, not returned' }, resume: () => null },
+  finished: { awaitsHook: false, staleCheck: false, covers: true, resume: (d) => (d.verdict === 'return' ? { prompt: d.note } : null) },
+}
 
 const papersOf = (f: PermissionForm): Papers =>
   ({ sessionId: f.session_id, cwd: f.cwd, toolName: f.tool_name, toolInput: f.tool_input, ...(f.job ? { job: f.job } : {}) })
@@ -113,7 +138,11 @@ function writeAtomic(file: string, data: unknown): void {
 }
 
 function readEntry(file: string): HallEntry | null {
-  try { return JSON.parse(readFileSync(file, 'utf8')) } catch { return null }
+  let raw: HallFile
+  try { raw = JSON.parse(readFileSync(file, 'utf8')) } catch { return null }
+  if (raw.kind === 'incident' || raw.kind === 'finished') return { ...raw, raw }
+  const f = raw.form
+  return { kind: 'permission', id: f.tool_use_id, papers: papersOf(f), arrivedAt: raw.arrivedAt, transcriptPath: f.transcript_path, raw }
 }
 
 export function submit(dir: string, form: PermissionForm, now = new Date()): void {
@@ -121,13 +150,13 @@ export function submit(dir: string, form: PermissionForm, now = new Date()): voi
   const file = fileFor(hallDir(dir), form.tool_use_id)
   // The hook re-files a still-parked call on every resume; keep its original arrival.
   const arrivedAt = readEntry(file)?.arrivedAt ?? now.toISOString()
-  writeAtomic(file, { kind: 'permission', form, arrivedAt } satisfies HallEntry)
+  writeAtomic(file, { kind: 'permission', form, arrivedAt } satisfies HallFile)
 }
 
 // ponytail: a missing transcript is the only staleness checked; an expired prompt cache just costs more on resume.
 // Finished visitors aren't checked: the Stop hook doesn't record their transcript yet.
-const isStale = (f: PermissionForm) =>
-  typeof f.transcript_path === 'string' && isAbsolute(f.transcript_path) && !existsSync(f.transcript_path)
+const isStale = (e: HallEntry) =>
+  RULES[e.kind].staleCheck && typeof e.transcriptPath === 'string' && isAbsolute(e.transcriptPath) && !existsSync(e.transcriptPath)
 
 export function listHall(dir: string, now = new Date()): Visitor[] {
   let files: string[]
@@ -138,17 +167,10 @@ export function listHall(dir: string, now = new Date()): Visitor[] {
     .filter((f) => f.endsWith('.json'))
     .map((f) => readEntry(join(hallDir(dir), f)))
     .filter((e): e is HallEntry => e !== null)
-    .map((e): Visitor => {
-      const waitSeconds = Math.floor((now.getTime() - Date.parse(e.arrivedAt)) / 1000)
-      return e.kind === 'incident'
-        ? { kind: 'incident', toolUseId: e.id, against: e.against, complaint: e.complaint, ...e.papers, ...who(e.papers), arrivedAt: e.arrivedAt, waitSeconds, stale: false }
-        : e.kind === 'finished'
-        ? { kind: 'finished', toolUseId: e.id, ...e.papers, ...who(e.papers), arrivedAt: e.arrivedAt, waitSeconds, stale: false }
-        : {
-          kind: 'permission', toolUseId: e.form.tool_use_id, ...papersOf(e.form), ...who(papersOf(e.form)), arrivedAt: e.arrivedAt, waitSeconds,
-          stale: isStale(e.form),
-        }
-    })
+    .map((e): Visitor => ({
+      kind: e.kind, toolUseId: e.id, ...(e.against === undefined ? {} : { against: e.against, complaint: e.complaint }), ...e.papers, ...who(e.papers),
+      arrivedAt: e.arrivedAt, waitSeconds: Math.floor((now.getTime() - Date.parse(e.arrivedAt)) / 1000), stale: isStale(e),
+    } as Visitor))
     .sort((a, b) => a.arrivedAt.localeCompare(b.arrivedAt))
 }
 
@@ -164,14 +186,14 @@ export function stamp(dir: string, toolUseId: string, decision: Decision, now = 
   if (decision.verdict === 'return' && !decision.note.trim()) throw new Error('a return needs a note')
   const entry = readEntry(hallFile)
   if (!entry) throw new NotFound(`${toolUseId} is not in the hall`)
-  if (entry.kind === 'incident' && decision.verdict === 'return') throw new Error('an incident is upheld or dismissed, not returned')
+  const rules = RULES[entry.kind]
+  if (rules.rejects?.verdict === decision.verdict) throw new Error(rules.rejects.message)
   const at = now.toISOString()
-  const record: LedgerEntry = entry.kind === 'incident'
-    ? { type: 'stamp', at, toolUseId, against: entry.against, ...entry.papers, decision }
-    : entry.kind === 'finished'
-    ? { type: 'stamp', at, toolUseId, ...entry.papers, decision, covers: [entry.papers.toolInput.commits].flat().filter((c): c is string => typeof c === 'string') }
-    : { type: 'stamp', at, toolUseId, ...papersOf(entry.form), decision }
-  if (entry.kind !== 'incident' && entry.kind !== 'finished') {
+  const record: LedgerEntry = {
+    type: 'stamp', at, toolUseId, ...(entry.against === undefined ? {} : { against: entry.against }), ...entry.papers, decision,
+    ...(rules.covers ? { covers: [entry.papers.toolInput.commits].flat().filter((c): c is string => typeof c === 'string') } : {}),
+  }
+  if (rules.awaitsHook) {
     mkdirSync(decisionsDir(dir), { recursive: true })
     writeAtomic(fileFor(decisionsDir(dir), toolUseId), decision)
   }
@@ -183,14 +205,13 @@ export function stamp(dir: string, toolUseId: string, decision: Decision, now = 
     // so the agent isn't parked for good. Best effort: the append's error is the one reported.
     try {
       rmSync(fileFor(decisionsDir(dir), toolUseId), { force: true })
-      writeAtomic(hallFile, entry)
+      writeAtomic(hallFile, entry.raw)
     } catch {}
     throw e
   }
   const resume: Resume = { sessionId: record.sessionId, cwd: record.cwd, ...(record.job ? { job: record.job } : {}) }
-  if (entry.kind === 'incident') return null
-  if (entry.kind === 'finished') return decision.verdict === 'return' ? { ...resume, prompt: decision.note } : null
-  return isStale(entry.form) ? null : resume // a stale session can't be resumed; the stamp is still recorded
+  const resumes = rules.resume(decision)
+  return !resumes || isStale(entry) ? null : { ...resume, ...resumes } // a stale session can't be resumed; the stamp is still recorded
 }
 
 /**
@@ -202,13 +223,13 @@ export function fileFinished(dir: string, form: FinishedForm, now = new Date()):
   const file = fileFor(hallDir(dir), id) // validates the session id too
   let parked: string[] = []
   try { parked = readdirSync(hallDir(dir)) } catch {}
-  if (parked.some((f) => { const e = readEntry(join(hallDir(dir), f)); return e && e.kind !== 'incident' && e.kind !== 'finished' && e.form.session_id === form.session_id })) return null
+  if (parked.some((f) => { const e = readEntry(join(hallDir(dir), f)); return e && RULES[e.kind].awaitsHook && e.papers.sessionId === form.session_id })) return null
   const papers: Papers = {
     sessionId: form.session_id, cwd: form.cwd, toolName: 'Finished work',
     toolInput: { message: form.message, commits: form.commits }, ...(form.job ? { job: form.job } : {}),
   }
   mkdirSync(hallDir(dir), { recursive: true })
-  writeAtomic(file, { kind: 'finished', id, papers, arrivedAt: now.toISOString() } satisfies HallEntry)
+  writeAtomic(file, { kind: 'finished', id, papers, arrivedAt: now.toISOString() } satisfies HallFile)
   return id
 }
 
@@ -242,7 +263,7 @@ export function fileComplaint(dir: string, against: string, reason: string, now 
   // Record first: the ledger is what stops a second complaint, so it must never miss one.
   appendLedger(dir, { type: 'complaint', at, toolUseId: id, against, reason, ...papers })
   mkdirSync(hallDir(dir), { recursive: true })
-  writeAtomic(fileFor(hallDir(dir), id), { kind: 'incident', id, against, complaint: reason, papers, arrivedAt: at } satisfies HallEntry)
+  writeAtomic(fileFor(hallDir(dir), id), { kind: 'incident', id, against, complaint: reason, papers, arrivedAt: at } satisfies HallFile)
   return id
 }
 
@@ -281,7 +302,7 @@ export function matchReverts(dir: string, git: RevertSource, now = new Date()): 
 function papersFor(dir: string, id: string): Papers {
   const entry = readEntry(fileFor(hallDir(dir), id))
   if (!entry) throw new NotFound(`${id} is not in the hall`)
-  return entry.kind === 'incident' || entry.kind === 'finished' ? entry.papers : papersOf(entry.form)
+  return entry.papers
 }
 
 /** One file of rules on the directive board. */
