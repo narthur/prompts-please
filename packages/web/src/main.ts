@@ -1,5 +1,6 @@
 // The booth: Phaser draws the scene; the hall and papers are plain HTML so text stays readable.
 import { startBooth, type Verdict } from './scene.ts'
+import { bureau, type Visitor, type LedgerEntry, type InteractiveSession } from './bureau-client.ts'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
 import css from 'highlight.js/lib/languages/css'
@@ -21,28 +22,6 @@ const LANG_BY_EXT: Record<string, string> = {
   json: 'json', md: 'markdown', py: 'python', ts: 'typescript', tsx: 'typescript', html: 'xml', xml: 'xml', svg: 'xml', yml: 'yaml', yaml: 'yaml',
 }
 const langOf = (path: unknown) => LANG_BY_EXT[String(path ?? '').split('.').pop()?.toLowerCase() ?? '']
-
-// Shape of core's GET /api/hall. Kept local: web talks to core only over HTTP.
-type Visitor = {
-  toolUseId: string
-  sessionId: string
-  cwd: string
-  toolName: string
-  toolInput: Record<string, unknown>
-  waitSeconds: number
-  stale: boolean
-  character: { label: string; name: string; portrait: number }
-  trust: { admitted: number; complaints: number; level: 'unknown' | 'known' | 'trusted' | 'suspect' }
-} & ({ kind: 'permission' } | { kind: 'incident'; against: string; complaint: string } | { kind: 'finished' })
-
-// Shape of core's GET /api/ledger entries (only the fields the booth shows).
-type LedgerEntry = { at: string; toolUseId: string; toolName: string; cwd: string; job?: string } & (
-  | { type: 'stamp'; against?: string; decision: { verdict: Verdict; reason?: string; note?: string } }
-  | { type: 'complaint'; against: string; reason: string }
-)
-
-// Shape of core's GET /api/other-window.
-type InteractiveSession = { sessionId: string; cwd: string; name: string; status: string; updatedAt: string; character: { name: string; label: string } }
 
 let hall: Visitor[] = []
 let selectedId: string | null = null
@@ -145,19 +124,10 @@ async function showBoard(id: string | null) {
   if (!id) return boardEl.replaceChildren()
   boardEl.replaceChildren(el('p', 'Loading…'))
   let content: HTMLElement[]
-  let failed = false
-  try {
-    const res = await fetch(`/api/hall/${encodeURIComponent(id)}/directives`)
-    const rules: { source: string; text: string }[] = res.ok ? await res.json() : []
-    content = res.ok
-      ? rules.flatMap((r) => [el('h4', r.source), code(r.text, 'markdown')])
-      : [el('p', `Could not load the rules: ${await errorText(res)}`)]
-    if (res.ok && !rules.length) content = [el('p', 'No CLAUDE.md applies to this visitor.')]
-    failed = !res.ok
-  } catch {
-    content = [el('p', 'Could not load the rules: bureau unreachable')]
-    failed = true
-  }
+  const res = await bureau.directives(id)
+  if (res.ok) content = res.value.length ? res.value.flatMap((r) => [el('h4', r.source), code(r.text, 'markdown')]) : [el('p', 'No CLAUDE.md applies to this visitor.')]
+  else content = [el('p', `Could not load the rules: ${res.error}`)]
+  const failed = !res.ok
   if (boardFor !== id) return // the operator moved on to another visitor
   if (failed) boardFor = null // try again on the next poll
   boardEl.replaceChildren(el('p', 'CLAUDE.md files only; imports, CLAUDE.local.md and memory are not shown.'), ...content)
@@ -190,16 +160,8 @@ function interrogation(id: string): HTMLElement {
     show(`Q: ${question}`)
     q.value = ''
     questionDrafts.delete(id)
-    try {
-      const res = await fetch(`/api/hall/${encodeURIComponent(id)}/interrogate`, {
-        method: 'POST',
-        headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
-        body: JSON.stringify({ question }),
-      })
-      show(res.ok ? `A: ${(await res.json()).answer}` : `(no answer: ${await errorText(res)})`)
-    } catch {
-      show('(no answer: bureau unreachable)')
-    }
+    const res = await bureau.interrogate(id, question)
+    show(res.ok ? `A: ${res.value.answer}` : `(no answer: ${res.error})`)
     pending.delete(id)
     papersKey = '' // rebuild, so the answer shows even if the papers were redrawn meanwhile
     render()
@@ -294,10 +256,6 @@ function render() {
   deskEl.replaceChildren(note, stamps)
 }
 
-async function errorText(res: Response): Promise<string> {
-  try { return (await res.json()).error ?? res.statusText } catch { return `${res.status} ${res.statusText}` }
-}
-
 let ledgerKey = ''
 
 function renderLedger(entries: LedgerEntry[]) {
@@ -309,7 +267,7 @@ function renderLedger(entries: LedgerEntry[]) {
     const time = new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     const where = `${e.toolName} · ${e.cwd.split('/').pop()}${e.job ? `/${e.job}` : ''}`
     if (e.type === 'complaint') return el('li', `${time} COMPLAINT about ${where} — ${e.reason}`)
-    const text = e.decision.reason ?? e.decision.note
+    const text = 'reason' in e.decision ? e.decision.reason : 'note' in e.decision ? e.decision.note : undefined
     const verb = e.against ? { admit: 'UPHELD', refuse: 'DISMISSED', return: 'RETURNED' }[e.decision.verdict] : e.decision.verdict.toUpperCase()
     const li = el('li', `${time} ${verb} ${e.against ? 'complaint about ' : ''}${where}${text ? ` — ${text}` : ''} `)
     if (!e.against && e.decision.verdict === 'admit' && !complained.has(e.toolUseId)) {
@@ -332,27 +290,18 @@ function renderOther(sessions: InteractiveSession[]) {
 let stampEpoch = 0
 async function refresh() {
   const epoch = stampEpoch
-  const [hallRes, ledgerRes, otherRes] = await Promise.allSettled([fetch('/api/hall'), fetch('/api/ledger?limit=50'), fetch('/api/other-window')])
+  const [hallRes, ledgerRes, otherRes] = await Promise.all([bureau.hall(), bureau.ledger(), bureau.otherWindow()])
   let next: Visitor[] | null = null, why = ''
-  try {
-    if (hallRes.status === 'rejected') why = 'Bureau unreachable'
-    else if (hallRes.value.ok) next = await hallRes.value.json()
-    else why = `Bureau error: ${await errorText(hallRes.value)}`
-  } catch {
-    why = 'Bureau sent an unreadable hall'
-  }
+  if (hallRes.ok) next = hallRes.value
+  else why = hallRes.kind === 'unreachable' ? 'Bureau unreachable' : hallRes.kind === 'unreadable' ? 'Bureau sent an unreadable hall' : `Bureau error: ${hallRes.error}`
   if (epoch !== stampEpoch) return // the post-stamp refresh brings the fresh hall
   if (next) hall = next
   problem = why
   render()
   // The ledger is secondary: if it fails, keep showing the last good one.
-  try { if (ledgerRes.status === 'fulfilled' && ledgerRes.value.ok) { const entries: LedgerEntry[] = await ledgerRes.value.json(); renderLedger(entries); addSites(entries.map((e) => e.cwd)) } } catch {}
-  try {
-    if (otherRes.status === 'fulfilled' && otherRes.value.ok) renderOther(await otherRes.value.json())
-    else otherEl.replaceChildren(el('li', 'Could not read the other window.'))
-  } catch {
-    otherEl.replaceChildren(el('li', 'Could not read the other window.'))
-  }
+  if (ledgerRes.ok) { renderLedger(ledgerRes.value); addSites(ledgerRes.value.map((e) => e.cwd)) }
+  if (otherRes.ok) renderOther(otherRes.value)
+  else otherEl.replaceChildren(el('li', 'Could not read the other window.'))
 }
 
 async function stamp(toolUseId: string, verdict: Verdict, text: string) {
@@ -362,21 +311,13 @@ async function stamp(toolUseId: string, verdict: Verdict, text: string) {
   stamping = true
   stampEpoch++
   render()
-  try {
-    const res = await fetch(`/api/hall/${encodeURIComponent(toolUseId)}/stamp`, {
-      method: 'POST',
-      headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
-      body: JSON.stringify(verdict === 'admit' ? { verdict } : verdict === 'refuse' ? { verdict, reason: text } : { verdict, note: text }),
-    })
-    if (res.ok) {
-      ok = true; drafts.delete(toolUseId); booth.slam(verdict)
-      // The visitor takes its papers and rules with it; the operator's own sheets stay put.
-      toggleSheet('papers', false); toggleSheet('board', false)
-    }
-    else alert(`Stamp failed: ${await errorText(res)}`)
-  } catch {
-    alert('Stamp failed: bureau unreachable')
+  const res = await bureau.stamp(toolUseId, verdict, text)
+  if (res.ok) {
+    ok = true; drafts.delete(toolUseId); booth.slam(verdict)
+    // The visitor takes its papers and rules with it; the operator's own sheets stay put.
+    toggleSheet('papers', false); toggleSheet('board', false)
   }
+  else alert(`Stamp failed: ${res.error}`)
   stamping = false
   await refresh()
   // The rebuild removed the pressed button. If the visitor has left the hall, put a keyboard user on the newly selected one.
@@ -390,37 +331,24 @@ async function stamp(toolUseId: string, verdict: Verdict, text: string) {
 async function complain(toolUseId: string) {
   const reason = prompt('What went wrong with this admission?')
   if (!reason?.trim()) return
-  try {
-    const res = await fetch(`/api/ledger/${encodeURIComponent(toolUseId)}/complaint`, {
-      method: 'POST',
-      headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
-      body: JSON.stringify({ reason }),
-    })
-    if (!res.ok) alert(`Complaint failed: ${await errorText(res)}`)
-  } catch {
-    alert('Complaint failed: bureau unreachable')
-  }
+  const res = await bureau.complain(toolUseId, reason)
+  if (!res.ok) alert(`Complaint failed: ${res.error}`)
   await refresh()
 }
 
 async function scanReverts() {
-  try {
-    const res = await fetch('/api/reverts/scan', { method: 'POST', headers: { 'X-Prompts-Please': '1' } })
-    if (!res.ok) return alert(`Scan failed: ${await errorText(res)}`)
-    const { incidents, errors } = await res.json()
-    alert([
-      incidents.length ? `${incidents.length} complaint(s) filed from reverts.` : 'No new reverts of admitted work.',
-      ...errors.map((e: string) => `Failed: ${e}`),
-    ].join('\n'))
-  } catch {
-    alert('Scan failed: bureau unreachable')
-  }
+  const res = await bureau.scanReverts()
+  if (!res.ok) return alert(`Scan failed: ${res.error}`)
+  const { incidents, errors } = res.value
+  alert([
+    incidents.length ? `${incidents.length} complaint(s) filed from reverts.` : 'No new reverts of admitted work.',
+    ...errors.map((e: string) => `Failed: ${e}`),
+  ].join('\n'))
   await refresh()
 }
 document.querySelector<HTMLButtonElement>('#scan-reverts')!.onclick = scanReverts
 
 // Help Wanted: post a notice and the bureau sends a fresh agent out on it; it shows up in the hall when it needs a stamp.
-type Notice = { task: string; cwd: string; postedAt: string }
 const noticeForm = document.querySelector<HTMLFormElement>('#notice-form')!
 const noticesEl = document.querySelector<HTMLUListElement>('#notices')!
 const sites = new Set<string>() // project folders seen in the ledger and on notices, offered as Site suggestions
@@ -430,34 +358,22 @@ function addSites(cwds: string[]) {
   if (sites.size !== before) document.querySelector('#sites')!.replaceChildren(...[...sites].sort().map((c) => Object.assign(el('option'), { value: c })))
 }
 async function loadNotices() {
-  try {
-    const res = await fetch('/api/notices')
-    if (!res.ok) return noticesEl.replaceChildren(el('li', `Could not load notices: ${await errorText(res)}`))
-    const notices: Notice[] = await res.json()
-    addSites(notices.map((n) => n.cwd))
-    noticesEl.replaceChildren(...(notices.length
-      ? notices.slice(0, 20).map((n) => el('li', `${new Date(n.postedAt).toLocaleString()} · ${n.cwd.split('/').pop()} · ${n.task}`))
-      : [el('li', 'No notices posted yet.')]))
-  } catch {
-    noticesEl.replaceChildren(el('li', 'Could not load notices: bureau unreachable'))
-  }
+  const res = await bureau.listNotices()
+  if (!res.ok) return noticesEl.replaceChildren(el('li', `Could not load notices: ${res.error}`))
+  const notices = res.value
+  addSites(notices.map((n) => n.cwd))
+  noticesEl.replaceChildren(...(notices.length
+    ? notices.slice(0, 20).map((n) => el('li', `${new Date(n.postedAt).toLocaleString()} · ${n.cwd.split('/').pop()} · ${n.task}`))
+    : [el('li', 'No notices posted yet.')]))
 }
 noticeForm.onsubmit = async (e) => {
   e.preventDefault()
   const data = new FormData(noticeForm)
   const button = noticeForm.querySelector('button')!
   button.disabled = true
-  try {
-    const res = await fetch('/api/notices', {
-      method: 'POST',
-      headers: { 'X-Prompts-Please': '1', 'content-type': 'application/json' },
-      body: JSON.stringify({ task: data.get('task'), cwd: data.get('cwd') }),
-    })
-    if (res.ok) noticeForm.querySelector('textarea')!.value = ''
-    else alert(`Notice not posted: ${await errorText(res)}`)
-  } catch {
-    alert('Notice not posted: bureau unreachable')
-  }
+  const res = await bureau.postNotice(data.get('task'), data.get('cwd'))
+  if (res.ok) noticeForm.querySelector('textarea')!.value = ''
+  else alert(`Notice not posted: ${res.error}`)
   button.disabled = false
   loadNotices()
 }
