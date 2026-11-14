@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ES2023", "DOM"], "types": ["vite/client"] },
+  "compilerOptions": { "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ES2023", "DOM"], "types": ["vite/client", "node"] },
   "include": ["src"]
 }
