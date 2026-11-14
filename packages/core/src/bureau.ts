@@ -439,6 +439,23 @@ export function postNotice(dir: string, input: { task: string; cwd: string }, no
   return notice
 }
 
+/**
+ * Record a notice, then launch the agent that answers it. If the launch throws, the notice is
+ * removed again (a listed notice means an agent went out on it) and the error propagates.
+ */
+export function dispatchNotice(dir: string, input: { task: string; cwd: string }, launch: (n: Notice) => void, now = new Date()): Notice {
+  const notice = postNotice(dir, input, now)
+  try { launch(notice) } catch (e) {
+    const line = JSON.stringify(notice)
+    const lines = readFileSync(noticesFile(dir), 'utf8').split('\n')
+    const i = lines.lastIndexOf(line)
+    if (i >= 0) lines.splice(i, 1)
+    writeFileSync(noticesFile(dir), lines.join('\n'))
+    throw e
+  }
+  return notice
+}
+
 /** Posted notices, newest first. A torn or foreign line is skipped. */
 export function listNotices(dir: string): Notice[] {
   if (!existsSync(noticesFile(dir))) return []

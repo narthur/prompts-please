@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { dailySummary, directives, fileComplaint, interrogate, listHall, listNotices, listOtherWindow, matchReverts, NotFound, parseDecision, postNotice, readLedger, stamp } from './bureau.ts'
+import { dailySummary, dispatchNotice, directives, fileComplaint, interrogate, listHall, listNotices, listOtherWindow, matchReverts, NotFound, parseDecision, readLedger, stamp } from './bureau.ts'
 import { globalDirectives, matcher, port, sessionsDir, stateDir, summaryDir } from './config.ts'
 import { createStamper } from './resume-queue.ts'
 import * as claude from './services/claude/index.ts'
@@ -149,10 +149,11 @@ createServer((req, res) => {
     readBody(req).then((raw) => {
       const body = parseJson(raw) as { task?: unknown; cwd?: unknown } | null
       if (typeof body?.task !== 'string' || typeof body?.cwd !== 'string') return send(res, 400, { error: 'body must be {"task": string, "cwd": string}' })
-      let notice
-      try { notice = postNotice(stateDir, { task: body.task, cwd: body.cwd }) } catch (e) { return sendError(res, e) }
-      claude.startSession({ task: notice.task, cwd: notice.cwd, settingsPath, stateDir })
-      send(res, 200, notice)
+      try {
+        send(res, 200, dispatchNotice(stateDir, { task: body.task, cwd: body.cwd }, (n) => {
+          try { claude.startSession({ task: n.task, cwd: n.cwd, settingsPath, stateDir }) } catch (e) { throw new claude.Upstream(`could not start an agent: ${(e as Error).message}`) }
+        }))
+      } catch (e) { sendError(res, e) }
     }, () => send(res, 413, { error: 'body too large' }))
     return
   }
